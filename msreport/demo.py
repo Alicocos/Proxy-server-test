@@ -105,3 +105,12 @@ def demo_logistics(today: datetime) -> list[dict]:
         {**base, "shipment": "L-100", "order": "00298", "factory": "Guangzhou Meili Textile", "goods": "Текстиль",
          "cn_ship": d(70), "cn_arrive": d(66), "ext_ship": d(62), "eta": d(35), "fact": d(30), "ext_paid": 2600.0},
     ]
+
+
+def demo_orders(today: datetime) -> list[dict]:
+    d = lambda n: today - timedelta(days=n)  # noqa: E731
+    row = lambda n, code, qty, rec, eta: {"order": f"Z-{n}", "date": d(40), "factory": "Ningbo Tools Co", "code": code,  # noqa: E731
+                                          "article": "", "name": "", "qty": qty, "received": rec, "price": 12.5,
+                                          "currency": "CNY", "eta": eta, "comment": ""}
+    return [row(1, "50003", 500, 0, d(-12)), row(1, "50010", 800, 300, d(-12)), row(2, "50141", 1000, 0, d(6)),
+            row(2, "99999", 200, 0, d(-20)), row(3, "50020", 300, 300, d(15))]

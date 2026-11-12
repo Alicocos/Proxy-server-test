@@ -91,6 +91,26 @@ def test_sales_from_docs_and_excluded_store():
     assert a.build_products(r, CFG)[0]["stock"] == 60
 
 
+def test_manual_orders(tmp_path):
+    path = tmp_path / "orders.xlsx"
+    assert manual.read_orders(path) == [] and path.exists()
+    from openpyxl import load_workbook
+    wb = load_workbook(path)
+    wb["Заказы"].append(["Z1", datetime(2026, 10, 1), "Завод", 1, None, None, 100, 20, 5, "CNY", datetime(2026, 11, 2)])
+    wb["Заказы"].append(["Z1", None, "Завод", None, "нет такого", None, 50])
+    wb.save(path)
+    rows = manual.read_orders(path)
+    r = raw(stock=20, q30=30, q90=90)
+    r["stock_all"][0]["code"] = "1"
+    transit, out = a.match_orders(r, rows, TODAY)
+    assert transit == {PID: 80}
+    assert [(o["status"], o["left"]) for o in out] == [("Товар не найден в МойСклад", 50), ("Просрочен", 80)]
+    assert out[1]["overdue"] == 10 and out[1]["left_sum"] == 400
+    assert a.build_products(r, CFG)[0]["status"] == a.URGENT
+    p = a.build_products(r, CFG, transit)[0]
+    assert (p["transit"], p["status"]) == (80, a.OK)
+
+
 def test_transfers():
     r = raw(stock=200, q30=30, q90=90)
     store = lambda sid, n, q: {"meta": {"href": f"{H}/store/{sid}"}, "name": n, "stock": q}  # noqa: E731
@@ -120,7 +140,8 @@ def test_logistics_statuses():
 def test_demo_end_to_end(tmp_path):
     tpl = tmp_path / "in" / "logistics.xlsx"
     assert manual.read_logistics(tpl) == [] and tpl.exists()  # шаблон создаётся и читается
-    rep = a.build_report(demo.demo_raw(TODAY), demo.demo_logistics(TODAY), CFG, TODAY)
+    rep = a.build_report(demo.demo_raw(TODAY), demo.demo_logistics(TODAY), CFG, TODAY, demo.demo_orders(TODAY))
+    assert (rep["kpi"]["ord_lines"], rep["kpi"]["ord_unmatched"], rep["kpi"]["ord_overdue"]) == (4, 1, 1)
     k = rep["kpi"]
     assert k["stock_value"] > 0 and 0 < k["frozen_share"] < 1 and k["deposits"] > 0 and k["baz_sum"] > 0 and len(rep["monthly"]) > 3 and k["ship_overdue"] == 1
     assert abs(sum(s["stock_value"] for s in rep["stores"]) - k["stock_value"] - k["excluded_value"]) < 1

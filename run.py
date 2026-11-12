@@ -40,6 +40,7 @@ def main() -> int:
 
     if args.demo:
         raw, logistics = demo.demo_raw(today), demo.demo_logistics(today)
+        orders = demo.demo_orders(today)
     else:
         tok = token()
         if not tok:
@@ -52,8 +53,9 @@ def main() -> int:
             print(f"Ошибка: {e}", file=sys.stderr)
             return 1
         logistics = manual.read_logistics(ROOT / cfg["files"]["logistics"])
+        orders = manual.read_orders(ROOT / cfg["files"]["orders"])
 
-    rep = analytics.build_report(raw, logistics, cfg, today)
+    rep = analytics.build_report(raw, logistics, cfg, today, orders)
     name = f"Отчет_закуп_логистика_{today:%Y-%m-%d}{'_ДЕМО' if args.demo else ''}.xlsx"
     out = Path(args.out) if args.out else ROOT / cfg["files"]["reports_dir"] / name
     excel.write_report(rep, out)

@@ -21,12 +21,34 @@ COLUMNS = [
 SHEET = "Логистика"
 
 
-def create_template(path: Path) -> None:
+ORDER_COLUMNS = [
+    ("order", "Заказ №", "s", 12), ("date", "Дата заказа", "d", 13), ("factory", "Завод", "s", 26),
+    ("code", "Код товара", "s", 14), ("article", "Артикул", "s", 16), ("name", "Товар", "s", 40),
+    ("qty", "Заказано, шт", "n", 12), ("received", "Уже получено, шт", "n", 12), ("price", "Цена за шт", "n", 12),
+    ("currency", "Валюта", "s", 9), ("eta", "План прибытия", "d", 13), ("comment", "Комментарий", "s", 30),
+]
+ORDER_SHEET = "Заказы"
+ORDER_HELP = [
+    "Одна строка = один товар в одном заказе заводу.",
+    "Товар находится по «Код товара», затем по «Артикул», затем по точному названию из МойСклад. Достаточно одного из трёх.",
+    "В пути считается: «Заказано» минус «Уже получено». Когда товар принят на склад — впишите полученное количество или удалите строку.",
+    "Даты вводите как даты Excel (например 05.11.2026). Названия столбцов не меняйте.",
+]
+LOGISTICS_HELP = [
+    "Одна строка = одна отправка (партия груза).",
+    "Даты вводите как даты Excel (например 05.11.2026).",
+    "Статус считается сам по заполненным датам: отправка с завода → склад карго → внешняя отправка → факт прибытия.",
+    "Названия столбцов не меняйте, порядок менять можно.",
+]
+
+
+def create_template(path: Path, columns=None, sheet=None, help_lines=None) -> None:
+    columns, sheet, help_lines = columns or COLUMNS, sheet or SHEET, help_lines or LOGISTICS_HELP
     path.parent.mkdir(parents=True, exist_ok=True)
     wb = Workbook()
     ws = wb.active
-    ws.title = SHEET
-    for i, (_, title, _, width) in enumerate(COLUMNS, 1):
+    ws.title = sheet
+    for i, (_, title, _, width) in enumerate(columns, 1):
         c = ws.cell(row=1, column=i, value=title)
         c.font = Font(bold=True, color="FFFFFF")
         c.fill = PatternFill("solid", fgColor="1F4E78" if not title.startswith(("Китай", "Внешняя")) else
@@ -36,13 +58,7 @@ def create_template(path: Path) -> None:
     ws.row_dimensions[1].height = 45
     ws.freeze_panes = "B2"
     info = wb.create_sheet("Инструкция")
-    for line in [
-        "Одна строка = одна отправка (партия груза).",
-        "Даты вводите как даты Excel (например 05.11.2026).",
-        "Статус считается сам по заполненным датам: отправка с завода → склад карго → внешняя отправка → факт прибытия.",
-        "«Заказ поставщику №» — номер заказа из МойСклад, чтобы связать груз с оплатой.",
-        "Названия столбцов не меняйте, порядок менять можно.",
-    ]:
+    for line in help_lines:
         info.append([line])
     info.column_dimensions["A"].width = 110
     wb.save(path)
@@ -71,12 +87,12 @@ def _num(v):
         return None
 
 
-def read_logistics(path: Path) -> list[dict]:
+def _read(path: Path, columns, sheet, help_lines) -> list[dict]:
     if not path.exists():
-        create_template(path)
+        create_template(path, columns, sheet, help_lines)
         return []
-    ws = load_workbook(path, data_only=True)[SHEET]
-    by_title = {title: (key, kind) for key, title, kind, _ in COLUMNS}
+    ws = load_workbook(path, data_only=True)[sheet]
+    by_title = {title: (key, kind) for key, title, kind, _ in columns}
     header = {i: by_title[str(c.value).strip()] for i, c in enumerate(ws[1]) if c.value and str(c.value).strip() in by_title}
     rows = []
     for raw in ws.iter_rows(min_row=2, values_only=True):
@@ -85,6 +101,16 @@ def read_logistics(path: Path) -> list[dict]:
         row = {}
         for i, (key, kind) in header.items():
             v = raw[i] if i < len(raw) else None
+            if kind == "s" and isinstance(v, float) and v.is_integer():
+                v = int(v)  # код 50012, который Excel сохранил числом
             row[key] = _date(v) if kind == "d" else _num(v) if kind == "n" else ("" if v is None else str(v).strip())
         rows.append(row)
     return rows
+
+
+def read_logistics(path: Path) -> list[dict]:
+    return _read(path, COLUMNS, SHEET, LOGISTICS_HELP)
+
+
+def read_orders(path: Path) -> list[dict]:
+    return _read(path, ORDER_COLUMNS, ORDER_SHEET, ORDER_HELP)

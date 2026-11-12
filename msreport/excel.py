@@ -67,7 +67,9 @@ def _summary(ws, rep):
         ("Закуп", [
             ("Позиций «срочно заказать»", k["urgent_sku"], MONEY, "запас кончится раньше срока поставки"),
             ("Рекомендовано к заказу", k["rec_value"], MONEY, f"{k['rec_sku']} позиций, по себестоимости"),
-            ("Товар в пути", k["transit_value"] or "нет данных", MONEY, "заказы ведутся вне МойСклад — товар в пути в расчёт не входит"),
+            ("Товар в пути", k["transit_value"] if k["ord_lines"] else "не заполнено", MONEY, "из input/orders.xlsx, по себестоимости МойСклад"),
+            ("Строк заказов в пути", k["ord_lines"], MONEY, f"просрочено: {k['ord_overdue']}"),
+            ("Строк, где товар не найден в МойСклад", k["ord_unmatched"], MONEY, "не учтены в закупе — проверьте код или артикул"),
         ]),
         ("Деньги у заводов", [
             ("Депозиты у заводов (предоплата без товара)", k["deposits"], MONEY, "по балансу взаиморасчётов: оплачено больше, чем принято"),
@@ -148,6 +150,18 @@ def write_report(rep: dict, path: Path) -> Path:
         ("Продажи 90 дн", "from_q90", 10, QTY), ("Запас, дней", "from_cover", 9, DAYS),
         ("Переместить, шт", "qty", 11, QTY), ("Сумма", "value", 13, MONEY),
     ], rep["transfers"])
+
+    table(wb.create_sheet("Заказы в пути"), [
+        ("Статус", "status", 26, None), ("Заказ №", "order", 12, None), ("Дата заказа", "date", 12, DATE),
+        ("Завод", "factory", 26, None), ("Код", "code", 12, None), ("Артикул", "article", 14, None),
+        ("Товар", "name", 40, None), ("Заказано", "qty", 10, QTY), ("Получено", "received", 10, QTY),
+        ("В пути, шт", "left", 10, QTY), ("Цена", "price", 10, "#,##0.00"), ("Валюта", "currency", 8, None),
+        ("В пути, сумма", "left_sum", 13, MONEY), ("План прибытия", "eta", 12, DATE),
+        ("Просрочка, дней", "overdue", 10, DAYS), ("Комментарий", "comment", 30, None),
+    ], rep["orders"], red_if_positive=("overdue",))
+    for row in wb["Заказы в пути"].iter_rows(min_row=2, max_col=1):
+        v = row[0].value
+        row[0].fill = FILLS["red" if v in ("Просрочен", "Товар не найден в МойСклад") else "green" if v == "Получен" else "blue"]
 
     table(wb.create_sheet("Базар"), [
         ("Товар", "name", 40, None), ("Артикул", "article", 14, None), ("Код", "code", 12, None),
