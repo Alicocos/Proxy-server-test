@@ -15,7 +15,7 @@ def demo_raw(today: datetime) -> dict:
     uid = lambda: str(uuid.UUID(int=rnd.getrandbits(128)))  # noqa: E731
     f = lambda d: (today - timedelta(days=d)).strftime("%Y-%m-%d %H:%M:%S.000")  # noqa: E731
 
-    names = ["Основной склад 1", "Основной склад 2"] + [f"Базар, ангар {i}" for i in range(1, 9)]
+    names = ["Основной склад 1", "Основной склад 2"] + [f"Базар, ангар {i}" for i in range(1, 8)] + ["Склад брак"]
     stores = [{"id": uid(), "name": n} for n in names]
     for s in stores:
         s.update(_meta("store", s["id"]))
@@ -86,7 +86,12 @@ def demo_raw(today: datetime) -> dict:
     payments.append({"meta": {"type": "paymentout"}, "name": "00999", "moment": f(5), "sum": 5000000,
                      "agent": {**_meta("counterparty", uid()), "name": "Аренда ангара"}, "operations": []})
 
-    return {"stores": stores, "stock_all": stock_all, "stock_bystore": bystore, "sales30": s30, "sales90": s90,
+    agents = {f["id"]: f["name"] for f in factories}
+    balances = {f["id"]: rnd.choice([-1, -1, 1, 0]) * rnd.randint(5, 90) * 10000000 for f in factories}
+    supplies = [{"sum": o["shippedSum"], "agent": o["agent"], "rate": o["rate"], "moment": o["moment"],
+                 **({"purchaseOrder": {}} if rnd.random() < 0.5 else {})} for o in orders if o["shippedSum"]]
+    return {"agents": agents, "balances": balances, "supplies": supplies, "sales_source": "демо",
+            "stores": stores, "stock_all": stock_all, "stock_bystore": bystore, "sales30": s30, "sales90": s90,
             "sales90_by_store": by_store, "orders": orders, "payments": payments}
 
 

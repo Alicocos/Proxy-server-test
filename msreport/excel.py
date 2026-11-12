@@ -44,13 +44,14 @@ def table(ws, cols, rows, top=1, red_if_positive=()):
 
 
 def _summary(ws, rep):
-    k = rep["kpi"]
+    k, ql = rep["kpi"], rep["quality"]
     ws.column_dimensions["A"].width = 46
     ws.column_dimensions["B"].width = 20
     ws.column_dimensions["C"].width = 60
     ws["A1"] = "Сводка по закупу и логистике"
     ws["A1"].font = Font(bold=True, size=14)
-    ws["A2"] = f"Дата отчёта: {rep['today']:%d.%m.%Y %H:%M}. Суммы — в валюте учёта МойСклад, товар — по себестоимости."
+    ws["A2"] = (f"Дата отчёта: {rep['today']:%d.%m.%Y %H:%M}. Суммы — в валюте учёта МойСклад, товар — по себестоимости. "
+                f"Продажи: {k['sales_source']}.")
     blocks = [
         ("Товарный запас", [
             ("Запас на складах", k["stock_value"], MONEY, ""),
@@ -60,22 +61,28 @@ def _summary(ws, rep):
             ("Доля заморозки", k["frozen_share"], PCT, ""),
             ("  неликвид (нет продаж 90 дней)", k["dead_value"], MONEY, f"{k['dead_sku']} позиций"),
             ("  излишек сверх нормы", k["over_value"], MONEY, f"{k['over_sku']} позиций"),
+            ("На исключённых складах (брак)", k["excluded_value"], MONEY, "в анализ закупа не входит"),
             ("Можно перераспределить между складами", k["transfers_value"], MONEY, f"{k['transfers']} перемещений вместо закупа"),
         ]),
         ("Закуп", [
             ("Позиций «срочно заказать»", k["urgent_sku"], MONEY, "запас с учётом пути кончится раньше срока поставки"),
             ("Рекомендовано к заказу", k["rec_value"], MONEY, f"{k['rec_sku']} позиций, по себестоимости"),
-            ("Товар в пути (ожидание)", k["transit_value"], MONEY, "заказано у поставщиков, не принято"),
+            ("Товар в пути", k["transit_value"], MONEY, "позиции открытых заказов заводам, ещё не принятые"),
         ]),
         ("Деньги у заводов", [
+            ("Депозиты у заводов (предоплата без товара)", k["deposits"], MONEY, "по балансу взаиморасчётов: оплачено больше, чем принято"),
+            ("Наш долг заводам", k["debts"], MONEY, "принято больше, чем оплачено"),
+            ("Оплачено заводам за 30 дней", k["payments_30"], MONEY, ""),
             ("Открытых заказов", k["orders_open"], MONEY, ""),
             ("Сумма открытых заказов", k["orders_sum"], MONEY, ""),
-            ("Оплачено", k["orders_paid"], MONEY, ""),
-            ("Предоплата без товара (депозиты)", k["orders_prepaid"], MONEY, "оплачено, но ещё не принято на склад"),
-            ("Осталось доплатить", k["orders_to_pay"], MONEY, "будущий отток денег"),
-            ("Долг за принятый товар", k["orders_debt"], MONEY, ""),
-            ("Заказов с просроченной поставкой", k["orders_overdue"], MONEY, ""),
-            ("Оплачено заводам за 30 дней", k["payments_30"], MONEY, ""),
+            ("Осталось доплатить по открытым заказам", k["orders_to_pay"], MONEY, "верно, только если платежи привязаны к заказам"),
+            ("Заказов с просроченной поставкой", k["orders_overdue"], MONEY, "считается только там, где указана плановая дата"),
+        ]),
+        ("Качество учёта в МойСклад", [
+            ("Открытые заказы без привязанных оплат", f"{ql['orders_no_pay']} из {ql['orders']}", None, "по ним не видно, сколько уже оплачено"),
+            ("Открытые заказы без плановой даты", f"{ql['orders_no_plan']} из {ql['orders']}", None, "по ним нельзя посчитать просрочку"),
+            ("Приёмки без привязки к заказу", f"{ql['supplies_unlinked']} из {ql['supplies']}", None, "заказ не закрывается, товар в пути не считается"),
+            ("Платежи заводам без привязки к документу", f"{ql['payments_unlinked']} из {ql['payments']}", None, "депозит виден только суммой по заводу"),
         ]),
         ("Логистика", [
             ("Отправок в работе", k["ship_active"], MONEY, ""),
@@ -139,24 +146,23 @@ def write_report(rep: dict, path: Path) -> Path:
         ("Переместить, шт", "qty", 11, QTY), ("Сумма", "value", 13, MONEY),
     ], rep["transfers"])
 
-    table(wb.create_sheet("Заказы заводам"), [
-        ("Заказ №", "name", 12, None), ("Дата", "moment", 12, DATE), ("Завод", "agent", 28, None),
-        ("Статус", "state", 16, None), ("Валюта", "currency", 8, None), ("Сумма", "sum", 13, MONEY),
-        ("Оплачено", "paid", 13, MONEY), ("% оплаты", "paid_share", 9, PCT), ("Принято", "received", 13, MONEY),
-        ("Доплатить", "to_pay", 13, MONEY), ("Предоплата без товара", "prepaid", 14, MONEY),
-        ("Долг за принятое", "debt", 13, MONEY), ("План поставки", "planned", 12, DATE),
-        ("Заказу дней", "age", 9, DAYS), ("Просрочка, дней", "overdue", 10, DAYS),
-        ("Сумма, вал. учёта", "sum_base", 14, MONEY), ("Предоплата, вал. учёта", "prepaid_base", 14, MONEY),
-        ("Доплатить, вал. учёта", "to_pay_base", 14, MONEY), ("Комментарий", "description", 30, None),
-    ], rep["orders"], red_if_positive=("overdue",))
-
     table(wb.create_sheet("Заводы"), [
-        ("Завод", "agent", 30, None), ("Открытых заказов", "orders", 10, MONEY), ("Валюта", "currencies", 9, None),
-        ("Сумма заказов", "sum_base", 15, MONEY), ("Оплачено", "paid_base", 15, MONEY),
-        ("Предоплата без товара (депозит)", "prepaid_base", 17, MONEY), ("Доплатить", "to_pay_base", 15, MONEY),
-        ("Долг за принятое", "debt_base", 15, MONEY), ("Просроченных заказов", "overdue_orders", 12, MONEY),
-        ("Платежи за период", "payments_base", 15, MONEY),
+        ("Завод", "agent", 34, None), ("Депозит у завода (предоплата)", "deposit", 17, MONEY),
+        ("Наш долг заводу", "debt", 15, MONEY), ("Платежи за период", "payments_base", 15, MONEY),
+        ("Платежей, шт", "payments", 9, MONEY), ("Приёмки за год", "supplied_base", 15, MONEY),
+        ("Приёмок, шт", "supplies", 9, MONEY), ("Открытых заказов", "orders", 10, MONEY),
+        ("Сумма открытых заказов", "sum_base", 15, MONEY), ("Просроченных заказов", "overdue_orders", 12, MONEY),
     ], rep["suppliers"], red_if_positive=("overdue_orders",))
+
+    table(wb.create_sheet("Заказы заводам"), [
+        ("Заказ №", "name", 12, None), ("Дата", "moment", 12, DATE), ("Завод", "agent", 30, None),
+        ("Статус", "state", 18, None), ("Валюта", "currency", 8, None), ("Сумма", "sum", 14, MONEY),
+        ("Оплачено (привязано)", "paid", 14, MONEY), ("% оплаты", "paid_share", 9, PCT),
+        ("Принято (привязано)", "received", 14, MONEY), ("Доплатить", "to_pay", 14, MONEY),
+        ("План поставки", "planned", 12, DATE), ("Заказу дней", "age", 9, DAYS),
+        ("Просрочка, дней", "overdue", 10, DAYS), ("Сумма, вал. учёта", "sum_base", 14, MONEY),
+        ("Чего не хватает в учёте", "flags", 38, None), ("Комментарий", "description", 30, None),
+    ], rep["orders"], red_if_positive=("overdue",))
 
     table(wb.create_sheet("Платежи"), [
         ("Дата", "moment", 12, DATE), ("Документ №", "name", 12, None), ("Завод", "agent", 28, None),

@@ -7,7 +7,9 @@ BASE = "https://api.moysklad.ru/api/remap/1.2"
 
 
 class ApiError(RuntimeError):
-    pass
+    def __init__(self, msg, status=None):
+        super().__init__(msg)
+        self.status = status
 
 
 class MoySklad:
@@ -36,7 +38,7 @@ class MoySklad:
             if r.status_code == 401:
                 raise ApiError("МойСклад отклонил токен (401). Проверьте MOYSKLAD_TOKEN.")
             if r.status_code >= 400:
-                raise ApiError(f"Ошибка МойСклад {r.status_code} на {path}: {r.text[:500]}")
+                raise ApiError(f"Ошибка МойСклад {r.status_code} на {path}: {r.text[:500]}", r.status_code)
             return r.json()
         raise ApiError(f"МойСклад не отвечает на {path} после нескольких попыток")
 

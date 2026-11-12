@@ -61,7 +61,7 @@ def main() -> int:
     k = rep["kpi"]
     print(f"\nГотово: {out}")
     print(f"Запас {k['stock_value']:,.0f} | заморожено {k['frozen']:,.0f} ({k['frozen_share']:.0%}) | "
-          f"депозиты у заводов {k['orders_prepaid']:,.0f} | доплатить {k['orders_to_pay']:,.0f} | "
+          f"депозиты у заводов {k['deposits'] or 0:,.0f} | наш долг заводам {k['debts'] or 0:,.0f} | "
           f"срочно заказать {k['urgent_sku']} поз.".replace(",", " "))
     return 0
 
