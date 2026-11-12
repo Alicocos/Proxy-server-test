@@ -59,40 +59,33 @@ def demo_raw(today: datetime) -> dict:
             if q30:
                 s30.append(row(q30))
 
-    cny = {"currency": {"isoCode": "CNY", "name": "юань"}, "value": 72.5}
-    usd = {"currency": {"isoCode": "USD", "name": "доллар"}, "value": 510.0}
-    factories = [{"id": uid(), "name": n} for n in (
+    factories = [{"id": uid(), "name": n, "tags": ["поставщики китай"]} for n in (
         "Yiwu Hongda Trading", "Guangzhou Meili Textile", "Ningbo Tools Co", "Foshan Ceramics", "Shenzhen Elec Ltd")]
-    orders, payments = [], []
-    for n in range(22):
-        fac, rate = rnd.choice(factories), rnd.choice([cny, cny, usd])
-        total = rnd.randint(20, 400) * 100000
-        age = rnd.randint(3, 150)
-        paid = round(total * rnd.choice([0, 0.3, 0.3, 1.0, 1.0]))
-        recv = round(total * (rnd.choice([1, 1, 0.6]) if age > 70 and paid == total else 0))
-        orders.append({
-            "name": f"{300 + n:05d}", "moment": f(age), "sum": total, "payedSum": paid, "shippedSum": recv,
-            "applicable": True, "agent": {**_meta("counterparty", fac["id"]), "name": fac["name"]},
-            "state": {"name": rnd.choice(["Новый", "В производстве", "Отгружен", "В пути"])}, "rate": rate,
-            "deliveryPlannedMoment": f(age - 55), "description": "",
-        })
-        if paid and age <= 90:
-            payments.append({
-                "meta": {"type": rnd.choice(["paymentout", "paymentout", "cashout"])}, "name": f"{900 + n:05d}",
-                "moment": f(max(age - 2, 0)), "sum": paid, "rate": rate, "applicable": True,
-                "agent": {**_meta("counterparty", fac["id"]), "name": fac["name"]},
-                "operations": [{"name": f"{300 + n:05d}"}], "paymentPurpose": "Оплата по заказу",
-            })
-    payments.append({"meta": {"type": "paymentout"}, "name": "00999", "moment": f(5), "sum": 5000000,
-                     "agent": {**_meta("counterparty", uid()), "name": "Аренда ангара"}, "operations": []})
-
-    agents = {f["id"]: f["name"] for f in factories}
-    balances = {f["id"]: rnd.choice([-1, -1, 1, 0]) * rnd.randint(5, 90) * 10000000 for f in factories}
-    supplies = [{"sum": o["shippedSum"], "agent": o["agent"], "rate": o["rate"], "moment": o["moment"],
-                 **({"purchaseOrder": {}} if rnd.random() < 0.5 else {})} for o in orders if o["shippedSum"]]
-    return {"agents": agents, "balances": balances, "supplies": supplies, "sales_source": "демо",
+    baz = {"id": uid(), "name": "Строи сити склад", "tags": ["базар"]}
+    other = {"id": uid(), "name": "Аренда ангара", "tags": []}
+    agent = lambda c: {"agent": _meta("counterparty", c["id"])}  # noqa: E731
+    payments, supplies = [], []
+    for fac in factories:
+        for _ in range(rnd.randint(4, 12)):
+            payments.append({"meta": {"type": "paymentout"}, "name": f"{rnd.randint(1, 9999):05d}",
+                             "moment": f(rnd.randint(1, 360)), "sum": rnd.randint(20, 300) * 10000000, **agent(fac),
+                             "expenseItem": {"name": "Закупка товаров"}, "description": "оплата заводу"})
+        for _ in range(rnd.randint(3, 10)):
+            supplies.append({"moment": f(rnd.randint(70 if fac is factories[0] else 1, 360)),
+                             "sum": rnd.randint(20, 300) * 10000000, **agent(fac)})
+    for n in range(40):
+        payments.append({"meta": {"type": "paymentout"}, "name": f"L{n:04d}", "moment": f(rnd.randint(1, 360)),
+                         "sum": rnd.randint(5, 60) * 1000000, **agent(other),
+                         "expenseItem": {"name": rnd.choice(["Доставка", "Доставка завод", "Аренда"])}})
+    balances = {fc["id"]: rnd.choice([-1, -1, 1]) * rnd.randint(5, 90) * 100000000 for fc in factories}
+    balances[baz["id"]] = 45000000000
+    bz = lambda rows: [{**r, "sellQuantity": r["sellQuantity"] // 3, "sellSum": r["sellSum"] // 3,  # noqa: E731
+                        "sellCostSum": r["sellCostSum"] // 3, "profit": r["profit"] // 3} for r in rows[::2]]
+    return {"counterparties": factories + [baz, other], "balances": balances, "supplies": supplies,
+            "payments": payments, "bazaar30": bz(s30), "bazaar90": bz(s90), "bazaar_in90": 9000000000,
+            "bazaar_ids": [baz["id"]], "sales_source": "демо",
             "stores": stores, "stock_all": stock_all, "stock_bystore": bystore, "sales30": s30, "sales90": s90,
-            "sales90_by_store": by_store, "orders": orders, "payments": payments}
+            "sales90_by_store": by_store}
 
 
 def demo_logistics(today: datetime) -> list[dict]:

@@ -43,35 +43,30 @@ def test_statuses():
     assert a.build_products(raw(), CFG) == []  # пустая карточка в отчёт не идёт
 
 
-def test_orders_and_payments():
-    agent = {"meta": {"href": f"{H}/counterparty/{S1}"}}
+def test_money():
+    ag = lambda i: {"meta": {"href": f"{H}/counterparty/{i}"}}  # noqa: E731
     r = raw()
-    r["agents"] = {S1: "Завод"}
-    r["balances"] = {S1: -21000000}
-    r["orders"] = [
-        {"name": "1", "moment": "2026-10-01 00:00:00.000", "sum": 1000000, "payedSum": 300000, "shippedSum": 0,
-         "agent": agent, "rate": {"currency": {"isoCode": "CNY"}, "value": 70},
-         "deliveryPlannedMoment": "2026-11-02 00:00:00.000"},
-        {"name": "2", "moment": "2026-09-01 00:00:00.000", "sum": 500000, "payedSum": 0, "shippedSum": 0,
-         "agent": agent, "state": {"name": "Полный келди"}},
-        {"name": "3", "moment": "2026-09-01 00:00:00.000", "sum": 500000, "payedSum": 0, "shippedSum": 0, "agent": agent},
-    ]
-    r["supplies"] = [{"sum": 500000, "agent": agent}, {"sum": 100000, "agent": agent, "purchaseOrder": {}}]
-    r["payments"] = [
-        {"meta": {"type": "paymentout"}, "moment": "2026-10-02 00:00:00.000", "sum": 300000, "agent": agent,
-         "rate": {"currency": {"isoCode": "CNY"}, "value": 70}, "operations": [{"name": "1"}]},
-        {"meta": {"type": "paymentout"}, "moment": "2026-10-03 00:00:00.000", "sum": 999,
-         "agent": {"meta": {"href": f"{H}/counterparty/{S2}"}}},
-    ]
-    orders, sup, pays, q = a.build_orders(r, CFG, TODAY)
-    assert [o["name"] for o in orders] == ["1", "3"]  # заказ в закрытом статусе не показываем
-    o = orders[0]
-    assert (o["to_pay"], o["overdue"], o["to_pay_base"], o["flags"]) == (7000, 10, 490000, "нет статуса")
-    assert "нет плановой даты" in orders[1]["flags"] and "нет привязанных оплат" in orders[1]["flags"]
-    assert len(pays) == 1 and pays[0]["linked"] == "1" and pays[0]["agent"] == "Завод"  # платёж не заводу отфильтрован
-    assert (sup[0]["deposit"], sup[0]["debt"], sup[0]["payments_base"], sup[0]["supplied_base"]) == (210000, 0, 210000, 6000)
-    assert q == {"orders": 2, "orders_no_pay": 1, "orders_no_plan": 1, "supplies": 2, "supplies_unlinked": 1,
-                 "payments": 1, "payments_unlinked": 0}
+    r["counterparties"] = [{"id": S1, "name": "Завод", "tags": ["Поставщики Китай"]},
+                           {"id": S2, "name": "Строи сити склад", "tags": ["поставщики китай"]},
+                           {"id": PID, "name": "Аренда", "tags": []}]
+    r["bazaar_ids"] = [S2]
+    r["balances"] = {S1: -21000000, S2: 99900}
+    pay = lambda m, s, a, item: {"meta": {"type": "paymentout"}, "moment": m, "sum": s, "agent": ag(a),  # noqa: E731
+                                 "expenseItem": {"name": item}}
+    r["payments"] = [pay("2026-11-02 00:00:00.000", 300000, S1, "Закупка товаров"),
+                     pay("2026-06-02 00:00:00.000", 700000, S1, "Закупка товаров"),
+                     pay("2026-11-03 00:00:00.000", 5000, PID, "Доставка"),
+                     pay("2026-11-03 00:00:00.000", 999, PID, "Аренда"),
+                     pay("2026-11-03 00:00:00.000", 999, S2, "Закупка товаров")]
+    r["supplies"] = [{"moment": "2026-06-10 00:00:00.000", "sum": 500000, "agent": ag(S1)}]
+    sup, reg, monthly = a.build_money(r, CFG, TODAY)
+    assert len(sup) == 1  # базар и аренда заводами не считаются
+    s = sup[0]
+    assert (s["deposit"], s["debt"], s["pay30"], s["pay365"], s["sup365"]) == (210000, 0, 3000, 10000, 5000)
+    assert s["days_no_sup"] == 155 and s["flag"] == "Предоплата без движения"
+    assert [x["sum"] for x in reg] == [3000]  # в реестре только последние 90 дней
+    nov = next(m for m in monthly if m["month"] == "2026-11")
+    assert (nov["paid"], nov["logistics"]) == (3000, 50)
 
 
 def test_sales_from_docs_and_excluded_store():
@@ -87,13 +82,7 @@ def test_sales_from_docs_and_excluded_store():
     assert sales_from_docs(dem, ret, {}, "2026-10-13 00:00:00")[0]["sellQuantity"] == 10
     assert sales_from_docs(dem, ret, {}, "2026-08-14 00:00:00", S2)[0]["sellQuantity"] == 5
 
-    r = raw(stock=20, q30=30, q90=90)  # без заказа — «срочно», с открытым заказом на 80 шт — нет
-    pos = [{"assortment": {"meta": {"href": f"{H}/product/{PID}"}}, "quantity": 100, "shipped": 20}]
-    r["orders"] = [{"sum": 100, "shippedSum": 20, "positions_rows": pos}]
-    p = a.build_products(r, CFG)[0]
-    assert (p["transit"], p["status"]) == (80, a.OK)
-    r["orders"][0]["state"] = {"name": "полный келди"}
-    assert a.build_products(r, CFG)[0]["status"] == a.URGENT
+    assert sales_from_docs(dem, ret, {}, "2026-08-14 00:00:00", agent_ids={S1}) == []
 
     r = raw(stock=100, q30=30, q90=90)
     r["stock_bystore"] = [{"meta": {"href": f"{H}/product/{PID}"}, "stockByStore": [
@@ -133,7 +122,7 @@ def test_demo_end_to_end(tmp_path):
     assert manual.read_logistics(tpl) == [] and tpl.exists()  # шаблон создаётся и читается
     rep = a.build_report(demo.demo_raw(TODAY), demo.demo_logistics(TODAY), CFG, TODAY)
     k = rep["kpi"]
-    assert k["stock_value"] > 0 and 0 < k["frozen_share"] < 1 and k["orders_open"] > 0 and k["ship_overdue"] == 1
+    assert k["stock_value"] > 0 and 0 < k["frozen_share"] < 1 and k["deposits"] > 0 and k["baz_sum"] > 0 and len(rep["monthly"]) > 3 and k["ship_overdue"] == 1
     assert abs(sum(s["stock_value"] for s in rep["stores"]) - k["stock_value"] - k["excluded_value"]) < 1
     out = excel.write_report(rep, tmp_path / "r.xlsx")
     assert out.stat().st_size > 10000

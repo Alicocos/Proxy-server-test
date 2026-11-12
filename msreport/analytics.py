@@ -63,30 +63,13 @@ def _excluded_stock(raw: dict, cfg: dict) -> dict:
     return out
 
 
-def _order_open(o: dict, cfg: dict) -> bool:
-    closed = {x.lower() for x in cfg["documents"].get("closed_states", [])}
-    total = _money(o.get("sum"))
-    return (o.get("applicable") is not False and total > 0
-            and _money(o.get("shippedSum")) < total - 0.005
-            and ((o.get("state") or {}).get("name") or "").lower() not in closed)
-
-
-def _order_transit(raw: dict, cfg: dict) -> dict:
-    """Количество по позициям открытых заказов поставщикам, ещё не принятое на склад."""
-    out = defaultdict(float)
-    for o in raw["orders"]:
-        if _order_open(o, cfg):
-            for p in o.get("positions_rows", []):
-                out[_id(p.get("assortment"))] += max(0, (p.get("quantity") or 0) - (p.get("shipped") or 0))
-    return out
-
-
 def build_products(raw: dict, cfg: dict) -> list[dict]:
     p = cfg["purchase"]
     lead, target = p["lead_time_days"], p["lead_time_days"] + p["safety_days"] + p["order_cycle_days"]
     s30, s90 = _sales(raw["sales30"]), _sales(raw["sales90"])
+    b30, b90 = _sales(raw.get("bazaar30", [])), _sales(raw.get("bazaar90", []))
 
-    excluded, ordered = _excluded_stock(raw, cfg), _order_transit(raw, cfg)
+    excluded = _excluded_stock(raw, cfg)
     items = {}
     for r in raw["stock_all"]:
         pid = _id(r)
@@ -96,7 +79,7 @@ def build_products(raw: dict, cfg: dict) -> list[dict]:
         items[pid] = {
             "id": pid, "name": r.get("name", ""), "code": r.get("code", ""), "article": r.get("article", ""),
             "folder": "/".join(x for x in (folder.get("pathName"), folder.get("name")) if x),
-            "stock": (r.get("stock") or 0) - excluded.get(pid, 0), "reserve": r.get("reserve") or 0, "transit": max(r.get("inTransit") or 0, ordered.get(pid, 0)),
+            "stock": (r.get("stock") or 0) - excluded.get(pid, 0), "reserve": r.get("reserve") or 0, "transit": r.get("inTransit") or 0,
             "cost": _money(r.get("price")), "sale_price": _money(r.get("salePrice")),
             "stock_days": r.get("stockDays"),
         }
@@ -135,6 +118,9 @@ def build_products(raw: dict, cfg: dict) -> list[dict]:
                 status = OK
         it.update({
             "q30": q30, "q90": q90, "daily": daily,
+            "baz30": b30.get(pid, {}).get("qty", 0), "baz90": b90.get(pid, {}).get("qty", 0),
+            "baz_sum90": b90.get(pid, {}).get("rev", 0.0),
+            "baz_share": min(1.0, max(0.0, b90.get(pid, {}).get("qty", 0) / q90)) if q90 else None,
             "rev90": s90.get(pid, {}).get("rev", 0.0), "profit90": s90.get(pid, {}).get("profit", 0.0),
             "cogs90": s90.get(pid, {}).get("cogs", 0.0),
             "cover": stock / daily if daily else None,
@@ -232,90 +218,69 @@ def _currency(doc: dict):
     return cur.get("isoCode") or cur.get("name") or "", rate.get("value") or 1
 
 
-def build_orders(raw: dict, cfg: dict, today: datetime):
-    names = raw.get("agents") or {}
-    blank = lambda name: {"agent": name, "orders": 0, "sum_base": 0.0, "to_pay_base": 0.0, "overdue_orders": 0,  # noqa: E731
-                          "supplied_base": 0.0, "supplies": 0, "payments_base": 0.0, "payments": 0,
-                          "deposit": None, "debt": None}
-    suppliers, orders = {}, []
+def build_money(raw: dict, cfg: dict, today: datetime):
+    """Заводы по платежам и приёмкам: депозиты, долги, реестр платежей, помесячная динамика."""
+    sc = cfg["suppliers"]
+    tags = {t.lower() for t in sc["tags"]}
+    bazaar = set(raw.get("bazaar_ids", []))
+    logi = {x.lower() for x in cfg["logistics"]["expense_items"]}
+    sup = {c["id"]: {"agent": c["name"], "deposit": None, "debt": None, "pay30": 0.0, "pay90": 0.0, "pay365": 0.0,
+                     "sup90": 0.0, "sup365": 0.0, "payments": 0, "supplies": 0, "last_pay": None, "last_sup": None,
+                     "flag": ""}
+           for c in raw.get("counterparties", [])
+           if c["id"] not in bazaar and tags & {t.lower() for t in c.get("tags", [])}}
+    months = defaultdict(lambda: {"paid": 0.0, "received": 0.0, "logistics": 0.0})
+    register = []
 
-    def sup(doc):
-        agent = doc.get("agent") or {}
-        aid = _id(agent) or "?"
-        name = names.get(aid) or agent.get("name") or "?"
-        return aid, name, suppliers.setdefault(aid, blank(name))
-
-    for o in raw["orders"]:
-        total = _money(o.get("sum"))
-        if o.get("applicable") is False or total <= 0:
-            continue
-        paid, recv = _money(o.get("payedSum")), _money(o.get("shippedSum"))
-        cur, rate = _currency(o)
-        aid, name, s = sup(o)
-        moment, planned = _dt(o.get("moment")), _dt(o.get("deliveryPlannedMoment"))
-        state = (o.get("state") or {}).get("name", "")
-        received_all = not _order_open(o, cfg)
-        row = {
-            "name": o.get("name", ""), "moment": moment, "agent": name, "state": state, "currency": cur,
-            "sum": total, "paid": paid, "received": recv, "to_pay": max(0.0, total - paid),
-            "prepaid": max(0.0, paid - recv), "paid_share": min(paid / total, 1.0), "planned": planned,
-            "age": (today - moment).days if moment else None,
-            "overdue": (today - planned).days if planned and not received_all and planned < today else 0,
-            "open": not received_all, "description": o.get("description", ""),
-            "sum_base": total * rate, "to_pay_base": max(0.0, total - paid) * rate,
-            "flags": "; ".join(f for f, bad in (("нет плановой даты", not planned), ("нет привязанных оплат", paid == 0),
-                                                ("нет статуса", not state)) if bad),
-        }
-        orders.append(row)
-        if row["open"]:
-            s["orders"] += 1
-            s["sum_base"] += row["sum_base"]
-            s["to_pay_base"] += row["to_pay_base"]
-            s["overdue_orders"] += 1 if row["overdue"] > 0 else 0
-
-    supplies = [x for x in raw.get("supplies", []) if x.get("applicable") is not False]
-    for x in supplies:
-        _, _, s = sup(x)
-        s["supplied_base"] += _money(x.get("sum")) * _currency(x)[1]
-        s["supplies"] += 1
-
-    payments = []
     for p in raw["payments"]:
-        aid = _id(p.get("agent") or {}) or "?"
-        if aid not in suppliers or p.get("applicable") is False:
+        when = _dt(p.get("moment"))
+        if p.get("applicable") is False or not when:
             continue
-        cur, rate = _currency(p)
-        amount = _money(p.get("sum"))
-        ops = p.get("operations") or []
-        payments.append({
-            "moment": _dt(p.get("moment")), "name": p.get("name", ""), "agent": suppliers[aid]["agent"],
-            "kind": "Наличные" if p.get("meta", {}).get("type") == "cashout" else "Безнал",
-            "currency": cur, "sum": amount, "sum_base": amount * rate,
-            "linked": ", ".join(x.get("name", "") for x in ops if x.get("name")) or ("да" if ops else ""),
-            "purpose": p.get("paymentPurpose") or p.get("description") or "",
-        })
-        suppliers[aid]["payments_base"] += amount * rate
-        suppliers[aid]["payments"] += 1
-    payments.sort(key=lambda x: x["moment"] or datetime.min, reverse=True)
+        amount = _money(p.get("sum")) * ((p.get("rate") or {}).get("value") or 1)
+        item = (p.get("expenseItem") or {}).get("name", "")
+        age = (today - when).days
+        if item.lower() in logi:
+            months[when.strftime("%Y-%m")]["logistics"] += amount
+        s = sup.get(_id(p.get("agent") or {}))
+        if not s:
+            continue
+        months[when.strftime("%Y-%m")]["paid"] += amount
+        s["pay365"] += amount
+        s["pay90"] += amount if age <= 90 else 0
+        s["pay30"] += amount if age <= 30 else 0
+        s["payments"] += 1
+        s["last_pay"] = max(s["last_pay"] or when, when)
+        if age <= sc["payments_days"]:
+            register.append({"moment": when, "name": p.get("name", ""), "agent": s["agent"], "sum": amount,
+                             "kind": "Наличные" if p.get("meta", {}).get("type") == "cashout" else "Безнал",
+                             "item": item, "purpose": p.get("paymentPurpose") or p.get("description") or ""})
+    for x in raw.get("supplies", []):
+        when = _dt(x.get("moment"))
+        s = sup.get(_id(x.get("agent") or {}))
+        if x.get("applicable") is False or not when or not s:
+            continue
+        amount = _money(x.get("sum")) * ((x.get("rate") or {}).get("value") or 1)
+        months[when.strftime("%Y-%m")]["received"] += amount
+        s["sup365"] += amount
+        s["sup90"] += amount if (today - when).days <= 90 else 0
+        s["supplies"] += 1
+        s["last_sup"] = max(s["last_sup"] or when, when)
 
     balances = raw.get("balances")
-    if balances is not None:  # в МойСклад баланс < 0: контрагент должен нам (предоплата); > 0: должны мы
-        for aid, s in suppliers.items():
+    for aid, s in sup.items():
+        if balances is not None:  # в МойСклад баланс < 0: контрагент должен нам (предоплата); > 0: должны мы
             bal = _money(balances.get(aid))
             s["deposit"], s["debt"] = max(0.0, -bal), max(0.0, bal)
-
-    open_orders = sorted((o for o in orders if o["open"]), key=lambda o: (-o["overdue"], -o["sum_base"]))
-    sup_rows = sorted(suppliers.values(), key=lambda s: (-(s["deposit"] or 0), -(s["debt"] or 0), -s["payments_base"]))
-    quality = {
-        "orders": len(open_orders),
-        "orders_no_pay": sum(1 for o in open_orders if o["paid"] == 0),
-        "orders_no_plan": sum(1 for o in open_orders if not o["planned"]),
-        "supplies": len(supplies),
-        "supplies_unlinked": sum(1 for x in supplies if "purchaseOrder" not in x),
-        "payments": len(payments),
-        "payments_unlinked": sum(1 for p in payments if not p["linked"]),
-    }
-    return open_orders, sup_rows, payments, quality
+        s["days_no_sup"] = (today - s["last_sup"]).days if s["last_sup"] else None
+        if s["deposit"] and (s["days_no_sup"] is None or s["days_no_sup"] > sc["stale_days"]):
+            s["flag"] = "Предоплата без движения"
+    rows = sorted((s for s in sup.values() if s["deposit"] or s["debt"] or s["pay365"] or s["sup365"]),
+                  key=lambda s: (-(s["deposit"] or 0), -(s["debt"] or 0), -s["pay365"]))
+    register.sort(key=lambda x: x["moment"], reverse=True)
+    monthly = [{"month": m, **v, "diff": v["paid"] - v["received"],
+                "logi_share": v["logistics"] / v["received"] if v["received"] else None}
+               for m, v in sorted(months.items())]
+    return rows, register, monthly
 
 
 def build_logistics(rows: list[dict], today: datetime) -> list[dict]:
@@ -351,19 +316,23 @@ def build_logistics(rows: list[dict], today: datetime) -> list[dict]:
 def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: datetime) -> dict:
     products = build_products(raw, cfg)
     stores, transfers = build_stores(raw, products, cfg)
-    orders, suppliers, payments, quality = build_orders(raw, cfg, today)
+    suppliers, payments, monthly = build_money(raw, cfg, today)
     logistics = build_logistics(logistics_rows, today)
 
     by_cost = {p["id"]: p["cost"] for p in products}
     stock_value = sum(p["stock_value"] for p in products)
     cogs90 = sum(p["cogs90"] for p in products)
+    rev90 = sum(p["rev90"] for p in products)
     frozen = sum(p["frozen"] for p in products)
     active = [r for r in logistics if r["status"] != "Прибыл"]
     unpaid = defaultdict(float)
     for r in logistics:
         if r["ext_unpaid"]:
             unpaid[r.get("ext_cur") or "?"] += r["ext_unpaid"]
-    last30 = sum(p["sum_base"] for p in payments if p["moment"] and (today - p["moment"]).days <= 30)
+    has_bal = raw.get("balances") is not None
+    baz_ids = raw.get("bazaar_ids", [])
+    baz_sum = sum(p["baz_sum90"] for p in products)
+    last3 = monthly[-3:]
     kpi = {
         "stock_value": stock_value,
         "sku_in_stock": sum(1 for p in products if p["stock"] > 0),
@@ -373,23 +342,29 @@ def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: dateti
         "dead_sku": sum(1 for p in products if p["status"] == DEAD),
         "over_value": sum(p["frozen"] for p in products if p["status"] == OVER),
         "over_sku": sum(1 for p in products if p["status"] == OVER),
+        "excluded_value": sum(q * by_cost.get(pid, 0) for pid, q in _excluded_stock(raw, cfg).items()),
+        "transfers": len(transfers), "transfers_value": sum(t["value"] for t in transfers),
         "transit_value": sum(p["transit_value"] for p in products),
         "urgent_sku": sum(1 for p in products if p["status"] == URGENT),
         "rec_value": sum(p["rec_value"] for p in products),
         "rec_sku": sum(1 for p in products if p["rec"] > 0),
-        "orders_open": len(orders),
-        "orders_sum": sum(o["sum_base"] for o in orders),
-        "orders_to_pay": sum(o["to_pay_base"] for o in orders),
-        "deposits": sum(s["deposit"] for s in suppliers) if raw.get("balances") is not None else None,
-        "debts": sum(s["debt"] for s in suppliers) if raw.get("balances") is not None else None,
-        "excluded_value": sum(q * by_cost.get(pid, 0) for pid, q in _excluded_stock(raw, cfg).items()),
-        "sales_source": raw.get("sales_source", ""),
-        "orders_overdue": sum(1 for o in orders if o["overdue"] > 0),
-        "payments_30": last30,
-        "ship_active": len(active),
-        "ship_overdue": sum(1 for r in active if r["overdue"] > 0),
+        "deposits": sum(s["deposit"] for s in suppliers) if has_bal else None,
+        "debts": sum(s["debt"] for s in suppliers) if has_bal else None,
+        "stale": sum(s["deposit"] for s in suppliers if s["flag"]) if has_bal else None,
+        "stale_n": sum(1 for s in suppliers if s["flag"]),
+        "pay30": sum(s["pay30"] for s in suppliers), "pay90": sum(s["pay90"] for s in suppliers),
+        "sup90": sum(s["sup90"] for s in suppliers),
+        "logi3": sum(m["logistics"] for m in last3),
+        "logi3_share": (sum(m["logistics"] for m in last3) / sum(m["received"] for m in last3)
+                        if sum(m["received"] for m in last3) else None),
+        "baz_sum": baz_sum, "baz_share": baz_sum / rev90 if rev90 else None,
+        "baz_in": _money(raw.get("bazaar_in90")),
+        "baz_balance": sum(_money(raw["balances"].get(i)) for i in baz_ids) if has_bal else None,
+        "baz_sku": sum(1 for p in products if p["baz90"] > 0),
+        "ship_active": len(active), "ship_overdue": sum(1 for r in active if r["overdue"] > 0),
         "ship_unpaid": ", ".join(f"{v:,.0f} {c}".replace(",", " ") for c, v in unpaid.items()) or "0",
-        "transfers": len(transfers), "transfers_value": sum(t["value"] for t in transfers),
+        "sales_source": raw.get("sales_source", ""),
     }
-    return {"today": today, "kpi": kpi, "quality": quality, "products": products, "stores": stores, "transfers": transfers,
-            "orders": orders, "suppliers": suppliers, "payments": payments, "logistics": logistics}
+    return {"today": today, "kpi": kpi, "products": products, "stores": stores, "transfers": transfers,
+            "suppliers": suppliers, "payments": payments, "monthly": monthly, "logistics": logistics,
+            "bazaar": sorted((p for p in products if p["baz90"] > 0), key=lambda p: -p["baz_sum90"])}
