@@ -21,19 +21,6 @@ COLUMNS = [
 SHEET = "Логистика"
 
 
-ORDER_COLUMNS = [
-    ("order", "Заказ №", "s", 12), ("date", "Дата заказа", "d", 13), ("factory", "Завод", "s", 26),
-    ("code", "Код товара", "s", 14), ("article", "Артикул", "s", 16), ("name", "Товар", "s", 40),
-    ("qty", "Заказано, шт", "n", 12), ("received", "Уже получено, шт", "n", 12), ("price", "Цена за шт", "n", 12),
-    ("currency", "Валюта", "s", 9), ("eta", "План прибытия", "d", 13), ("comment", "Комментарий", "s", 30),
-]
-ORDER_SHEET = "Заказы"
-ORDER_HELP = [
-    "Одна строка = один товар в одном заказе заводу.",
-    "Товар находится по «Код товара», затем по «Артикул», затем по точному названию из МойСклад. Достаточно одного из трёх.",
-    "В пути считается: «Заказано» минус «Уже получено». Когда товар принят на склад — впишите полученное количество или удалите строку.",
-    "Даты вводите как даты Excel (например 05.11.2026). Названия столбцов не меняйте.",
-]
 LOGISTICS_HELP = [
     "Одна строка = одна отправка (партия груза).",
     "Даты вводите как даты Excel (например 05.11.2026).",
@@ -112,5 +99,23 @@ def read_logistics(path: Path) -> list[dict]:
     return _read(path, COLUMNS, SHEET, LOGISTICS_HELP)
 
 
-def read_orders(path: Path) -> list[dict]:
-    return _read(path, ORDER_COLUMNS, ORDER_SHEET, ORDER_HELP)
+TRANSIT_TITLE = "В пути, шт (впишите)"
+ETA_TITLE = "План прибытия (впишите)"
+
+
+def read_transit(report: Path) -> list[dict]:
+    """То, что вы вписали в жёлтые столбцы листа «Закуп» прошлого отчёта: код товара → в пути и план прибытия."""
+    wb = load_workbook(report)
+    if "Закуп" not in wb.sheetnames:
+        return []
+    ws = wb["Закуп"]
+    col = {str(c.value).strip(): i for i, c in enumerate(ws[1]) if c.value}
+    if not {"Код", TRANSIT_TITLE} <= set(col):
+        return []
+    out = []
+    for raw in ws.iter_rows(min_row=2, values_only=True):
+        code, qty = raw[col["Код"]], _num(raw[col[TRANSIT_TITLE]])
+        if code not in (None, "") and qty and qty > 0:
+            eta = raw[col[ETA_TITLE]] if ETA_TITLE in col else None
+            out.append({"code": str(code).strip(), "qty": qty, "eta": _date(eta)})
+    return out

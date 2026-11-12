@@ -33,6 +33,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--demo", action="store_true", help="выдуманные данные вместо МойСклад")
     ap.add_argument("--out", help="путь к файлу отчёта")
+    ap.add_argument("--prev", help="прошлый отчёт, из которого перенести вписанное «в пути» (по умолчанию — самый свежий в reports/)")
     args = ap.parse_args()
 
     cfg = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
@@ -40,7 +41,7 @@ def main() -> int:
 
     if args.demo:
         raw, logistics = demo.demo_raw(today), demo.demo_logistics(today)
-        orders = demo.demo_orders(today)
+        orders = demo.demo_orders()
     else:
         tok = token()
         if not tok:
@@ -53,7 +54,12 @@ def main() -> int:
             print(f"Ошибка: {e}", file=sys.stderr)
             return 1
         logistics = manual.read_logistics(ROOT / cfg["files"]["logistics"])
-        orders = manual.read_orders(ROOT / cfg["files"]["orders"])
+        reports = sorted((ROOT / cfg["files"]["reports_dir"]).glob("*.xlsx"), key=lambda f: f.stat().st_mtime)
+        reports = [f for f in reports if "ДЕМО" not in f.name and not f.name.startswith("~")]
+        prev = Path(args.prev) if args.prev else reports[-1] if reports else None
+        orders = manual.read_transit(prev) if prev else []
+        if prev:
+            print(f"Перенесено из {prev.name}: {len(orders)} позиций «в пути»")
 
     rep = analytics.build_report(raw, logistics, cfg, today, orders)
     name = f"Отчет_закуп_логистика_{today:%Y-%m-%d}{'_ДЕМО' if args.demo else ''}.xlsx"

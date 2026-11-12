@@ -63,31 +63,17 @@ def _excluded_stock(raw: dict, cfg: dict) -> dict:
     return out
 
 
-def match_orders(raw: dict, order_rows: list[dict], today: datetime):
-    """Строки ручного файла заказов → количество в пути по товарам МойСклад и сами строки для листа."""
-    by_key = {}
-    for r in raw["stock_all"]:
-        pid = _id(r)
-        for kind in ("code", "article", "name"):
-            v = str(r.get(kind) or "").strip().lower()
-            if v:
-                by_key.setdefault((kind, v), pid)
-    transit, out = defaultdict(float), []
+def match_orders(raw: dict, order_rows: list[dict]):
+    """Вписанное вручную «в пути» (по коду товара) → количество и план прибытия по товарам МойСклад."""
+    by_code = {str(r.get("code") or "").strip().lower(): _id(r) for r in raw["stock_all"] if r.get("code")}
+    transit, etas = defaultdict(float), {}
     for o in order_rows:
-        o = dict(o)
-        pid = next((by_key[(k, str(o.get(k) or "").strip().lower())] for k in ("code", "article", "name")
-                    if (k, str(o.get(k) or "").strip().lower()) in by_key), None)
-        left = max(0.0, (o.get("qty") or 0) - (o.get("received") or 0))
-        o["left"], o["left_sum"] = left, left * (o.get("price") or 0)
-        o["overdue"] = (today - o["eta"]).days if o.get("eta") and left > 0 and o["eta"] < today else 0
-        o["status"] = ("Получен" if left == 0 else "Товар не найден в МойСклад" if not pid
-                       else "Просрочен" if o["overdue"] else "В пути")
-        if pid and left:
-            transit[pid] += left
-        out.append(o)
-    out.sort(key=lambda o: ({"Товар не найден в МойСклад": 0, "Просрочен": 1, "В пути": 2, "Получен": 3}[o["status"]],
-                            o.get("eta") or datetime.max))
-    return transit, out
+        pid = by_code.get(str(o.get("code") or "").strip().lower())
+        if pid and (o.get("qty") or 0) > 0:
+            transit[pid] += o["qty"]
+            if o.get("eta"):
+                etas[pid] = o["eta"]
+    return transit, etas
 
 
 def build_products(raw: dict, cfg: dict, ordered: dict | None = None) -> list[dict]:
@@ -341,8 +327,11 @@ def build_logistics(rows: list[dict], today: datetime) -> list[dict]:
 
 
 def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: datetime, order_rows=()) -> dict:
-    ordered, orders = match_orders(raw, list(order_rows), today)
+    ordered, etas = match_orders(raw, list(order_rows))
     products = build_products(raw, cfg, ordered)
+    for p in products:
+        p["eta"] = etas.get(p["id"])
+        p["transit_in"] = p["transit"] or None
     stores, transfers = build_stores(raw, products, cfg)
     suppliers, payments, monthly = build_money(raw, cfg, today)
     logistics = build_logistics(logistics_rows, today)
@@ -392,10 +381,12 @@ def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: dateti
         "ship_active": len(active), "ship_overdue": sum(1 for r in active if r["overdue"] > 0),
         "ship_unpaid": ", ".join(f"{v:,.0f} {c}".replace(",", " ") for c, v in unpaid.items()) or "0",
         "sales_source": raw.get("sales_source", ""),
-        "ord_lines": sum(1 for o in orders if o["left"] > 0),
-        "ord_unmatched": sum(1 for o in orders if o["status"] == "Товар не найден в МойСклад"),
-        "ord_overdue": sum(1 for o in orders if o["status"] == "Просрочен"),
+        "transit_sku": sum(1 for p in products if p["transit"] > 0),
+        "eta_overdue": sum(1 for p in products if p["transit"] > 0 and p["eta"] and p["eta"] < today),
+        "n_products": len(products),
+        "lead": cfg["purchase"]["lead_time_days"], "overstock": cfg["purchase"]["overstock_days"],
+        "target": sum(cfg["purchase"][x] for x in ("lead_time_days", "safety_days", "order_cycle_days")),
     }
-    return {"today": today, "kpi": kpi, "orders": orders, "products": products, "stores": stores, "transfers": transfers,
+    return {"today": today, "kpi": kpi, "products": products, "stores": stores, "transfers": transfers,
             "suppliers": suppliers, "payments": payments, "monthly": monthly, "logistics": logistics,
             "bazaar": sorted((p for p in products if p["baz90"] > 0), key=lambda p: -p["baz_sum90"])}
