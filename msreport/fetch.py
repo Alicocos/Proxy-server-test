@@ -111,8 +111,13 @@ def fetch_all(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
             bazaar_in += sum(x.get("sum") or 0 for x in ms.rows(
                 f"entity/{kind}", {"filter": f"moment>={t90};agent={c['meta']['href']}"}))
 
+    log("Заказы поставщикам…")
+    orders = ms.rows("entity/purchaseorder", {"filter": f"moment>={cfg['orders']['since']} 00:00:00", "expand": "state"})
+    for o in orders:
+        o["positions_rows"] = ms.rows(f"entity/purchaseorder/{o['id']}/positions")
+
     return {
-        "stores": stores, "counterparties": counterparties, "balances": balances, "stock_all": stock_all,
+        "orders": orders, "stores": stores, "counterparties": counterparties, "balances": balances, "stock_all": stock_all,
         "stock_bystore": stock_bystore, "sales30": sales30, "sales90": sales90, "sales90_by_store": by_store,
         "bazaar30": baz30, "bazaar90": baz90, "bazaar_in90": bazaar_in, "bazaar_ids": sorted(bazaar_ids),
         "sales_source": source, "supplies": supplies, "payments": payments,

@@ -91,29 +91,29 @@ def test_sales_from_docs_and_excluded_store():
     assert a.build_products(r, CFG)[0]["stock"] == 60
 
 
-def test_transit_entered_in_report_carries_over(tmp_path):
+def test_transit_from_purchase_orders():
     r = raw(stock=20, q30=30, q90=90)
-    r["stock_all"][0]["code"] = "77"
-    r.update(counterparties=[], supplies=[])
-    rep = a.build_report(r, [], CFG, TODAY)
-    assert rep["products"][0]["status"] == a.URGENT
-    path = excel.write_report(rep, tmp_path / "r.xlsx")
-    assert manual.read_transit(path) == []  # ничего не вписано
-
-    from openpyxl import load_workbook
-    wb = load_workbook(path)
-    ws = wb["Закуп"]
-    head = {c.value: c.column_letter for c in ws[1]}
-    assert ws[f"{head['Статус']}2"].value.startswith("=IF(") and "ROUNDUP" in ws[f"{head['Заказать, шт']}2"].value
-    ws[f"{head[manual.TRANSIT_TITLE]}2"] = 80  # пользователь вписал в жёлтую ячейку
-    ws[f"{head[manual.ETA_TITLE]}2"] = datetime(2026, 11, 2)
-    wb.save(path)
-    rows = manual.read_transit(path)
-    assert rows == [{"code": "77", "qty": 80, "eta": datetime(2026, 11, 2)}]
-    rep = a.build_report(r, [], CFG, TODAY, rows + [{"code": "нет такого", "qty": 5, "eta": None}])
+    r["counterparties"] = [{"id": S1, "name": "Завод", "tags": []}]
+    pos = lambda q, sh: {"assortment": {"meta": {"href": f"{H}/product/{PID}"}}, "quantity": q, "shipped": sh,  # noqa: E731
+                         "price": 1000, "discount": 0}
+    r["orders"] = [
+        {"name": "1", "moment": "2026-11-01 00:00:00.000", "deliveryPlannedMoment": "2026-11-10 00:00:00.000",
+         "sum": 10000, "agent": {"meta": {"href": f"{H}/counterparty/{S1}"}}, "rate": {"value": 70},
+         "positions_rows": [pos(100, 30)]},
+        {"name": "2", "moment": "2026-11-05 00:00:00.000", "positions_rows": [pos(50, 50)]},          # принят полностью
+        {"name": "3", "moment": "2026-11-05 00:00:00.000", "state": {"name": "ПОЛНЫЙ КЕЛДИ"},
+         "positions_rows": [pos(40, 0)]},                                                              # закрыт статусом
+        {"name": "4", "moment": "2026-11-06 00:00:00.000", "applicable": False, "positions_rows": [pos(40, 0)]},
+    ]
+    transit, etas, rows = a.build_orders(r, CFG, TODAY)
+    assert transit == {PID: 70} and etas[PID] == datetime(2026, 11, 10)
+    assert len(rows) == 1
+    o = rows[0]
+    assert (o["agent"], o["left_qty"], o["left_sum"], o["overdue"], o["status"]) == ("Завод", 70, 70 * 10 * 70, 2, "Просрочен")
+    rep = a.build_report({**r, "supplies": []}, [], CFG, TODAY)
     p = rep["products"][0]
-    assert (p["transit"], p["status"], p["eta"]) == (80, a.OK, datetime(2026, 11, 2))
-    assert (rep["kpi"]["transit_sku"], rep["kpi"]["eta_overdue"]) == (1, 1)
+    assert (p["transit"], p["status"], p["eta"]) == (70, a.OK, datetime(2026, 11, 10))
+    assert (rep["kpi"]["orders_open"], rep["kpi"]["orders_overdue"], rep["kpi"]["transit_sku"]) == (1, 1, 1)
 
 
 def test_transfers():
@@ -145,8 +145,8 @@ def test_logistics_statuses():
 def test_demo_end_to_end(tmp_path):
     tpl = tmp_path / "in" / "logistics.xlsx"
     assert manual.read_logistics(tpl) == [] and tpl.exists()  # шаблон создаётся и читается
-    rep = a.build_report(demo.demo_raw(TODAY), demo.demo_logistics(TODAY), CFG, TODAY, demo.demo_orders())
-    assert rep["kpi"]["transit_sku"] >= 3
+    rep = a.build_report(demo.demo_raw(TODAY), demo.demo_logistics(TODAY), CFG, TODAY)
+    assert (rep["kpi"]["orders_open"], rep["kpi"]["orders_overdue"], rep["kpi"]["orders_noplan"]) == (3, 1, 1)
     k = rep["kpi"]
     assert k["stock_value"] > 0 and 0 < k["frozen_share"] < 1 and k["deposits"] > 0 and k["baz_sum"] > 0 and len(rep["monthly"]) > 3 and k["ship_overdue"] == 1
     assert abs(sum(s["stock_value"] for s in rep["stores"]) - k["stock_value"] - k["excluded_value"]) < 1

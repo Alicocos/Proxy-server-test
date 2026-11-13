@@ -2,7 +2,6 @@
 from pathlib import Path
 
 from openpyxl import Workbook
-from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
@@ -23,7 +22,7 @@ MONEY, QTY, DAYS, PCT, DATE = "#,##0", "#,##0.##", "0", "0%", "DD.MM.YYYY"
 PROD_COLS = [
     ("Статус", "status", 17, None), ("ABC", "abc", 6, None), ("Товар", "name", 40, None),
     ("Артикул", "article", 14, None), ("Код", "code", 12, None), ("Группа", "folder", 24, None),
-    ("Остаток", "stock", 10, QTY), ("В пути, шт (впишите)", "transit_in", 11, QTY), ("План прибытия (впишите)", "eta", 13, DATE), ("Резерв", "reserve", 9, QTY),
+    ("Остаток", "stock", 10, QTY), ("В пути", "transit", 10, QTY), ("Ближайший приход", "eta", 12, DATE), ("Резерв", "reserve", 9, QTY),
     ("Продажи 30 дн", "q30", 10, QTY), ("Продажи 90 дн", "q90", 10, QTY),
     ("в т.ч. на базар 90 дн", "baz90", 10, QTY), ("Доля базара", "baz_share", 8, PCT),
     ("Продаж в день", "daily", 9, "0.00"), ("Запас, дней", "cover", 9, DAYS),
@@ -33,33 +32,6 @@ PROD_COLS = [
     ("Выручка 90 дн", "rev90", 13, MONEY), ("Прибыль 90 дн", "profit90", 13, MONEY),
     ("Дней на складе", "stock_days", 9, DAYS),
 ]
-COL = {key: get_column_letter(i) for i, (_, key, _, _) in enumerate(PROD_COLS, 1)}
-INPUT_FILL = PatternFill("solid", fgColor="FFF2CC")
-
-
-def _live_purchase(ws, rep):
-    """Лист «Закуп»: жёлтые столбцы для ввода и формулы, которые пересчитывают заказ сразу в Excel."""
-    k = rep["kpi"]
-    c = COL
-    for r, p in enumerate(rep["products"], 2):
-        for key in ("transit_in", "eta"):
-            ws[f"{c[key]}{r}"].fill = INPUT_FILL
-        if not p["daily"]:
-            continue
-        have = f"({c['stock']}{r}+N({c['transit_in']}{r}))"
-        ws[f"{c['cover_transit']}{r}"] = f"={have}/{c['daily']}{r}"
-        ws[f"{c['rec']}{r}"] = f"=MAX(0,ROUNDUP({c['daily']}{r}*{k['target']}-{have},0))"
-        ws[f"{c['rec_value']}{r}"] = f"={c['rec']}{r}*{c['cost']}{r}"
-        ws[f"{c['status']}{r}"] = (
-            f'=IF({have}/{c["daily"]}{r}<{k["lead"]},"{a.URGENT}",IF({c["rec"]}{r}>0,"{a.ORDER}",'
-            f'IF({c["stock"]}{r}/{c["daily"]}{r}>{k["overstock"]},"{a.OVER}","{a.OK}")))')
-        ws[f"{c['status']}{r}"].fill = PatternFill(fill_type=None)
-    n = len(rep["products"]) + 1
-    for text, color in ((a.URGENT, "red"), (a.ORDER, "orange"), (a.OVER, "orange"), (a.OK, "green")):
-        ws.conditional_formatting.add(f"A2:A{n}", CellIsRule(operator="equal", formula=[f'"{text}"'], fill=FILLS[color]))
-    ws.freeze_panes = "D2"
-
-
 def table(ws, cols, rows, top=1, red_if_positive=()):
     """cols: (заголовок, ключ, ширина, формат)."""
     for i, (title, _, width, _) in enumerate(cols, 1):
@@ -86,7 +58,6 @@ def table(ws, cols, rows, top=1, red_if_positive=()):
 
 def _summary(ws, rep):
     k = rep["kpi"]
-    n = max(k["n_products"] + 1, 2)
     ws.column_dimensions["A"].width = 46
     ws.column_dimensions["B"].width = 20
     ws.column_dimensions["C"].width = 60
@@ -107,10 +78,12 @@ def _summary(ws, rep):
             ("Можно перераспределить между складами", k["transfers_value"], MONEY, f"{k['transfers']} перемещений вместо закупа"),
         ]),
         ("Закуп", [
-            ("Позиций «срочно заказать»", f"=COUNTIF('Закуп'!{COL['status']}:{COL['status']},\"{a.URGENT}\")", MONEY, "запас вместе с товаром в пути кончится раньше срока поставки"),
-            ("Рекомендовано к заказу", f"=SUM('Закуп'!{COL['rec_value']}:{COL['rec_value']})", MONEY, "по себестоимости"),
-            ("Товар в пути", f"=SUMPRODUCT('Закуп'!{COL['transit_in']}2:{COL['transit_in']}{n},'Закуп'!{COL['cost']}2:{COL['cost']}{n})", MONEY, "то, что вы вписали в жёлтый столбец листа «Закуп», по себестоимости"),
-            ("Позиций в пути", k["transit_sku"], MONEY, f"с прошедшей плановой датой: {k['eta_overdue']}"),
+            ("Позиций «срочно заказать»", k["urgent_sku"], MONEY, "запас вместе с товаром в пути кончится раньше срока поставки"),
+            ("Рекомендовано к заказу", k["rec_value"], MONEY, f"{k['rec_sku']} позиций, по себестоимости"),
+            ("Товар в пути", k["transit_value"], MONEY, f"позиций: {k['transit_sku']}, по себестоимости"),
+            ("Открытых заказов поставщикам", k["orders_open"], MONEY, f"созданных с {k['orders_since']}"),
+            ("  из них с прошедшей плановой датой", k["orders_overdue"], MONEY, ""),
+            ("  из них без плановой даты", k["orders_noplan"], MONEY, "заполните «План. дата приёмки» в заказе"),
         ]),
         ("Деньги у заводов", [
             ("Депозиты у заводов (предоплата без товара)", k["deposits"], MONEY, "по балансу взаиморасчётов: оплачено больше, чем принято"),
@@ -160,10 +133,20 @@ def write_report(rep: dict, path: Path) -> Path:
     _summary(ws, rep)
 
     table(wb.create_sheet("Закуп"), PROD_COLS, rep["products"])
-    _live_purchase(wb["Закуп"], rep)
-    frozen_cols = [("В пути, шт", "transit", 10, QTY) if c[1] == "transit_in" else c for c in PROD_COLS if c[1] != "eta"]
+    wb["Закуп"].freeze_panes = "D2"
     frozen = sorted((p for p in rep["products"] if p["frozen"] > 0), key=lambda p: -p["frozen"])
-    table(wb.create_sheet("Заморозка"), frozen_cols, frozen)
+    table(wb.create_sheet("Заморозка"), PROD_COLS, frozen)
+
+    table(wb.create_sheet("Заказы в пути"), [
+        ("Статус", "status", 18, None), ("Заказ №", "name", 12, None), ("Дата", "moment", 12, DATE),
+        ("Завод", "agent", 30, None), ("Статус в МойСклад", "state", 18, None), ("Сумма заказа", "sum", 14, MONEY),
+        ("Оплачено (привязано)", "paid", 14, MONEY), ("Заказано, шт", "ordered", 11, QTY),
+        ("Ещё не принято, шт", "left_qty", 11, QTY), ("Ещё не принято, сумма", "left_sum", 14, MONEY),
+        ("План приёмки", "planned", 12, DATE), ("Заказу дней", "age", 9, DAYS),
+        ("Просрочка, дней", "overdue", 10, DAYS), ("Комментарий", "description", 30, None),
+    ], rep["orders"], red_if_positive=("overdue",))
+    for row in wb["Заказы в пути"].iter_rows(min_row=2, max_col=1):
+        row[0].fill = FILLS["red" if row[0].value == "Просрочен" else "orange" if row[0].value == "Нет плановой даты" else "blue"]
 
     table(wb.create_sheet("Склады"), [
         ("Склад", "store", 30, None), ("Запас, сумма", "stock_value", 15, MONEY), ("Позиций", "sku", 10, MONEY),

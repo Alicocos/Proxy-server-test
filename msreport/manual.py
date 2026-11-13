@@ -97,25 +97,3 @@ def _read(path: Path, columns, sheet, help_lines) -> list[dict]:
 
 def read_logistics(path: Path) -> list[dict]:
     return _read(path, COLUMNS, SHEET, LOGISTICS_HELP)
-
-
-TRANSIT_TITLE = "В пути, шт (впишите)"
-ETA_TITLE = "План прибытия (впишите)"
-
-
-def read_transit(report: Path) -> list[dict]:
-    """То, что вы вписали в жёлтые столбцы листа «Закуп» прошлого отчёта: код товара → в пути и план прибытия."""
-    wb = load_workbook(report)
-    if "Закуп" not in wb.sheetnames:
-        return []
-    ws = wb["Закуп"]
-    col = {str(c.value).strip(): i for i, c in enumerate(ws[1]) if c.value}
-    if not {"Код", TRANSIT_TITLE} <= set(col):
-        return []
-    out = []
-    for raw in ws.iter_rows(min_row=2, values_only=True):
-        code, qty = raw[col["Код"]], _num(raw[col[TRANSIT_TITLE]])
-        if code not in (None, "") and qty and qty > 0:
-            eta = raw[col[ETA_TITLE]] if ETA_TITLE in col else None
-            out.append({"code": str(code).strip(), "qty": qty, "eta": _date(eta)})
-    return out

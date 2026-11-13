@@ -63,17 +63,44 @@ def _excluded_stock(raw: dict, cfg: dict) -> dict:
     return out
 
 
-def match_orders(raw: dict, order_rows: list[dict]):
-    """Вписанное вручную «в пути» (по коду товара) → количество и план прибытия по товарам МойСклад."""
-    by_code = {str(r.get("code") or "").strip().lower(): _id(r) for r in raw["stock_all"] if r.get("code")}
-    transit, etas = defaultdict(float), {}
-    for o in order_rows:
-        pid = by_code.get(str(o.get("code") or "").strip().lower())
-        if pid and (o.get("qty") or 0) > 0:
-            transit[pid] += o["qty"]
-            if o.get("eta"):
-                etas[pid] = o["eta"]
-    return transit, etas
+def build_orders(raw: dict, cfg: dict, today: datetime):
+    """Открытые заказы поставщикам МойСклад → товар в пути по позициям, ближайший приход и строки для листа."""
+    closed = {x.lower() for x in cfg["orders"].get("closed_states", [])}
+    names = {c["id"]: c["name"] for c in raw.get("counterparties", [])}
+    transit, etas, rows = defaultdict(float), {}, []
+    for o in raw.get("orders", []):
+        state = ((o.get("state") or {}).get("name") or "")
+        if o.get("applicable") is False or state.lower() in closed:
+            continue
+        rate = (o.get("rate") or {}).get("value") or 1
+        left_qty = left_sum = ordered = 0.0
+        planned = _dt(o.get("deliveryPlannedMoment"))
+        for p in o.get("positions_rows", []):
+            pid = _id(p.get("assortment"))
+            left = max(0.0, (p.get("quantity") or 0) - (p.get("shipped") or 0))
+            ordered += p.get("quantity") or 0
+            if not pid or not left:
+                continue
+            transit[pid] += left
+            if planned and (pid not in etas or planned < etas[pid]):
+                etas[pid] = planned
+            left_qty += left
+            left_sum += left * _money(p.get("price")) * (1 - (p.get("discount") or 0) / 100) * rate
+        if not left_qty:
+            continue
+        moment = _dt(o.get("moment"))
+        total = _money(o.get("sum")) * rate
+        rows.append({
+            "name": o.get("name", ""), "moment": moment, "agent": names.get(_id(o.get("agent")), ""),
+            "state": state, "sum": total, "paid": _money(o.get("payedSum")) * rate,
+            "ordered": ordered, "left_qty": left_qty, "left_sum": left_sum, "planned": planned,
+            "age": (today - moment).days if moment else None,
+            "overdue": (today - planned).days if planned and planned < today else 0,
+            "status": "Просрочен" if planned and planned < today else "Нет плановой даты" if not planned else "В пути",
+            "description": o.get("description", ""),
+        })
+    rows.sort(key=lambda r: (-r["overdue"], r["planned"] or datetime.max))
+    return transit, etas, rows
 
 
 def build_products(raw: dict, cfg: dict, ordered: dict | None = None) -> list[dict]:
@@ -326,12 +353,11 @@ def build_logistics(rows: list[dict], today: datetime) -> list[dict]:
     return out
 
 
-def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: datetime, order_rows=()) -> dict:
-    ordered, etas = match_orders(raw, list(order_rows))
+def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: datetime) -> dict:
+    ordered, etas, orders = build_orders(raw, cfg, today)
     products = build_products(raw, cfg, ordered)
     for p in products:
-        p["eta"] = etas.get(p["id"])
-        p["transit_in"] = p["transit"] or None
+        p["eta"] = etas.get(p["id"]) if p["transit"] else None
     stores, transfers = build_stores(raw, products, cfg)
     suppliers, payments, monthly = build_money(raw, cfg, today)
     logistics = build_logistics(logistics_rows, today)
@@ -383,10 +409,11 @@ def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: dateti
         "sales_source": raw.get("sales_source", ""),
         "transit_sku": sum(1 for p in products if p["transit"] > 0),
         "eta_overdue": sum(1 for p in products if p["transit"] > 0 and p["eta"] and p["eta"] < today),
-        "n_products": len(products),
-        "lead": cfg["purchase"]["lead_time_days"], "overstock": cfg["purchase"]["overstock_days"],
-        "target": sum(cfg["purchase"][x] for x in ("lead_time_days", "safety_days", "order_cycle_days")),
+        "orders_open": len(orders), "orders_left": sum(o["left_sum"] for o in orders),
+        "orders_overdue": sum(1 for o in orders if o["overdue"]),
+        "orders_noplan": sum(1 for o in orders if not o["planned"]),
+        "orders_since": cfg["orders"]["since"],
     }
-    return {"today": today, "kpi": kpi, "products": products, "stores": stores, "transfers": transfers,
+    return {"today": today, "kpi": kpi, "orders": orders, "products": products, "stores": stores, "transfers": transfers,
             "suppliers": suppliers, "payments": payments, "monthly": monthly, "logistics": logistics,
             "bazaar": sorted((p for p in products if p["baz90"] > 0), key=lambda p: -p["baz_sum90"])}

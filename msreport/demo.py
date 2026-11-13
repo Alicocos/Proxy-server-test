@@ -81,7 +81,20 @@ def demo_raw(today: datetime) -> dict:
     balances[baz["id"]] = 45000000000
     bz = lambda rows: [{**r, "sellQuantity": r["sellQuantity"] // 3, "sellSum": r["sellSum"] // 3,  # noqa: E731
                         "sellCostSum": r["sellCostSum"] // 3, "profit": r["profit"] // 3} for r in rows[::2]]
-    return {"counterparties": factories + [baz, other], "balances": balances, "supplies": supplies,
+    pos = lambda r, q, sh: {"assortment": {"meta": {"href": r["meta"]["href"].split("?")[0]}},  # noqa: E731
+                            "quantity": q, "shipped": sh, "price": r["price"] // 70, "discount": 0}
+    cny = {"value": 72.5}
+    orders = [
+        {"name": "00001", "moment": f(50), "deliveryPlannedMoment": f(5), "sum": 1, "rate": cny,
+         **agent(factories[0]), "positions_rows": [pos(stock_all[3], 500, 0), pos(stock_all[10], 800, 300)]},
+        {"name": "00002", "moment": f(20), "deliveryPlannedMoment": f(-25), "sum": 1, "rate": cny,
+         **agent(factories[2]), "positions_rows": [pos(stock_all[141], 1000, 0)]},
+        {"name": "00003", "moment": f(10), "sum": 1, "rate": cny, **agent(factories[1]),
+         "positions_rows": [pos(stock_all[20], 300, 0)]},
+        {"name": "00004", "moment": f(90), "sum": 1, "rate": cny, "state": {"name": "Полный келди"},
+         **agent(factories[1]), "positions_rows": [pos(stock_all[30], 300, 0)]},
+    ]
+    return {"orders": orders, "counterparties": factories + [baz, other], "balances": balances, "supplies": supplies,
             "payments": payments, "bazaar30": bz(s30), "bazaar90": bz(s90), "bazaar_in90": 9000000000,
             "bazaar_ids": [baz["id"]], "sales_source": "демо",
             "stores": stores, "stock_all": stock_all, "stock_bystore": bystore, "sales30": s30, "sales90": s90,
@@ -105,8 +118,3 @@ def demo_logistics(today: datetime) -> list[dict]:
         {**base, "shipment": "L-100", "order": "00298", "factory": "Guangzhou Meili Textile", "goods": "Текстиль",
          "cn_ship": d(70), "cn_arrive": d(66), "ext_ship": d(62), "eta": d(35), "fact": d(30), "ext_paid": 2600.0},
     ]
-
-
-def demo_orders() -> list[dict]:
-    return [{"code": "50003", "qty": 500, "eta": None}, {"code": "50010", "qty": 500, "eta": None},
-            {"code": "50141", "qty": 1000, "eta": None}, {"code": "99999", "qty": 200, "eta": None}]
