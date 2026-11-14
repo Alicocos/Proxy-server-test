@@ -152,3 +152,26 @@ def test_demo_end_to_end(tmp_path):
     assert abs(sum(s["stock_value"] for s in rep["stores"]) - k["stock_value"] - k["excluded_value"]) < 1
     out = excel.write_report(rep, tmp_path / "r.xlsx")
     assert out.stat().st_size > 10000
+
+
+def test_mail_payload(tmp_path):
+    from msreport import mail
+    rep = a.build_report(demo.demo_raw(TODAY), demo.demo_logistics(TODAY), CFG, TODAY)
+    f = excel.write_report(rep, tmp_path / "r.xlsx")
+    sent = {}
+
+    class Resp:
+        status_code = 201
+        def json(self): return {"messageId": "x"}
+
+    class S:
+        def post(self, url, json, timeout, headers):
+            sent.update(url=url, json=json, headers=headers)
+            return Resp()
+
+    mail.send(f, rep, ["a@x.kz", "b@x.kz"], "a@x.kz", session=S())
+    j = sent["json"]
+    assert sent["url"] == mail.URL and sent["headers"]["api-key"] == "proxy-injected"
+    assert [t["email"] for t in j["to"]] == ["a@x.kz", "b@x.kz"] and j["sender"]["email"] == "a@x.kz"
+    assert j["attachment"][0]["name"] == "r.xlsx" and len(j["attachment"][0]["content"]) > 1000
+    assert "Срочно заказать" in j["htmlContent"] and "00001" in j["htmlContent"]  # просроченный демо-заказ

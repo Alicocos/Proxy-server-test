@@ -34,6 +34,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--demo", action="store_true", help="выдуманные данные вместо МойСклад")
     ap.add_argument("--out", help="путь к файлу отчёта")
+    ap.add_argument("--email", help="отправить отчёт на эти адреса (через запятую); можно задать MAIL_TO")
+    ap.add_argument("--sender", help="адрес отправителя, подтверждённый в Brevo; можно задать MAIL_FROM")
     args = ap.parse_args()
 
     cfg = tomllib.loads((ROOT / "config.toml").read_text(encoding="utf-8"))
@@ -58,6 +60,17 @@ def main() -> int:
     name = f"Отчет_закуп_логистика_{today:%Y-%m-%d_%H%M}{'_ДЕМО' if args.demo else ''}.xlsx"
     out = Path(args.out) if args.out else ROOT / cfg["files"]["reports_dir"] / name
     excel.write_report(rep, out)
+
+    to = [a.strip() for a in (args.email or os.environ.get("MAIL_TO", "")).split(",") if a.strip()]
+    if to:
+        from msreport import mail
+        sender = args.sender or os.environ.get("MAIL_FROM") or to[0]
+        try:
+            mail.send(out, rep, to, sender, api_key=os.environ.get("BREVO_API_KEY", "proxy-injected"))
+            print(f"Отправлено на: {', '.join(to)}")
+        except Exception as e:  # отчёт уже собран — сообщаем об ошибке почты, но не теряем файл
+            print(f"Почта не отправлена: {e}", file=sys.stderr)
+            return 3
 
     k = rep["kpi"]
     print(f"\nГотово: {out}")
