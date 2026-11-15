@@ -175,3 +175,4 @@ def test_mail_payload(tmp_path):
     assert [t["email"] for t in j["to"]] == ["a@x.kz", "b@x.kz"] and j["sender"]["email"] == "a@x.kz"
     assert j["attachment"][0]["name"] == "r.xlsx" and len(j["attachment"][0]["content"]) > 1000
     assert "Срочно заказать" in j["htmlContent"] and "00001" in j["htmlContent"]  # просроченный демо-заказ
+    assert "Больше всего заморожено" in j["htmlContent"]

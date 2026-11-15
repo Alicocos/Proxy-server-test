@@ -34,6 +34,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--demo", action="store_true", help="выдуманные данные вместо МойСклад")
     ap.add_argument("--out", help="путь к файлу отчёта")
+    ap.add_argument("--html", help="сохранить текст письма (HTML) в этот файл")
     ap.add_argument("--email", help="отправить отчёт на эти адреса (через запятую); можно задать MAIL_TO")
     ap.add_argument("--sender", help="адрес отправителя, подтверждённый в Brevo; можно задать MAIL_FROM")
     args = ap.parse_args()
@@ -60,6 +61,11 @@ def main() -> int:
     name = f"Отчет_закуп_логистика_{today:%Y-%m-%d_%H%M}{'_ДЕМО' if args.demo else ''}.xlsx"
     out = Path(args.out) if args.out else ROOT / cfg["files"]["reports_dir"] / name
     excel.write_report(rep, out)
+
+    if args.html:
+        from msreport import mail
+        Path(args.html).write_text(mail.summary_html(rep), encoding="utf-8")
+        print(f"Текст письма: {args.html}")
 
     to = [a.strip() for a in (args.email or os.environ.get("MAIL_TO", "")).split(",") if a.strip()]
     if to:
