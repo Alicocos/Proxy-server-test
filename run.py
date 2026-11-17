@@ -86,8 +86,15 @@ def main() -> int:
 
     if args.html:
         from msreport import mail
-        Path(args.html).write_text(mail.summary_html(rep, srep, debts), encoding="utf-8")
-        print(f"Текст письма: {args.html}")
+        # три письма — по одному на файл, чтобы каждый отчёт приходил отдельно и не терялся
+        wrap = lambda title, body: (f'<div style="font-family:Arial,sans-serif;font-size:14px"><p>{title} на '  # noqa: E731
+                                    f'{today:%d.%m.%Y %H:%M} (Алматы). Полный отчёт — в файле Excel во вложении.</p>{body}</div>')
+        base = Path(args.html)
+        base.write_text(mail.summary_html(rep), encoding="utf-8")
+        base.with_name(base.stem + "_sales.html").write_text(wrap("Продажи по группам клиентов", sales.html_section(srep)), encoding="utf-8")
+        if debts:
+            base.with_name(base.stem + "_debts.html").write_text(wrap("Дебиторка", sales.debts_html(debts)), encoding="utf-8")
+        print(f"Тексты писем: {base}, {base.stem}_sales.html, {base.stem}_debts.html")
 
     to = [a.strip() for a in (args.email or os.environ.get("MAIL_TO", "")).split(",") if a.strip()]
     if to:
