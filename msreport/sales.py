@@ -402,7 +402,7 @@ def html_section(rep: dict) -> str:
     ch = f"{tot['mtd'] / tot['prev_mtd'] - 1:+.0%}" if tot["prev_mtd"] > 0 else "—"
     rows += ("<tr><td><b>Итого</b></td>" + "".join(f'<td align="right"><b>{n(tot[k])}</b></td>' for k in ("yesterday", "d7", "mtd", "prev_mtd"))
              + f'<td align="right"><b>{ch}</b></td><td></td><td></td></tr>')
-    silent = [(g, rep["G"][g]["silent"]) for g in rep["groups"] if rep["G"][g]["silent"]]
+    silent = [(g, rep["G"][g]["silent"]) for g in rep["groups"] if rep["G"][g]["silent"] and g != OTHER]
     extra = ""
     if silent:
         extra = "<p><b>Крупные клиенты без покупок больше 45 дней:</b> " + "; ".join(
