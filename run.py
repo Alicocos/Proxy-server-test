@@ -76,7 +76,13 @@ def main() -> int:
     if sout == out:
         sout = out.with_name("Продажи_" + out.name)
     debts = sales.build_debts(raw, cfg, today)
-    sales.write_sales(srep, sout, debts)
+    sales.write_sales(srep, sout)
+    dout = None
+    if debts:
+        dout = sout.with_name(sout.name.replace("Продажи_по_клиентам", "Дебиторка"))
+        if dout == sout:
+            dout = sout.with_name("Дебиторка_" + sout.name)
+        sales.write_debts_book(debts, dout)
 
     if args.html:
         from msreport import mail
@@ -96,7 +102,9 @@ def main() -> int:
 
     k = rep["kpi"]
     print(f"\nГотово: {out}")
-    print(f"Продажи и дебиторка: {sout}")
+    print(f"Продажи: {sout}")
+    if dout:
+        print(f"Дебиторка: {dout}")
     print(f"Запас {k['stock_value']:,.0f} | заморожено {k['frozen']:,.0f} ({k['frozen_share']:.0%}) | "
           f"депозиты у заводов {k['deposits'] or 0:,.0f} | наш долг заводам {k['debts'] or 0:,.0f} | "
           f"срочно заказать {k['urgent_sku']} поз.".replace(",", " "))

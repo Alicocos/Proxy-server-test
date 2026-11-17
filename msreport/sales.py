@@ -227,6 +227,45 @@ def _debt_groups(wb, debts):
         c.font, c.number_format = BOLD, M
 
 
+def write_debts_book(debts: dict, path: Path) -> Path:
+    """Отдельный файл по дебиторке: сводка, список должников, группы, прочие долги."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Сводка"
+    ws["A1"] = f"Дебиторка на {debts['today']:%d.%m.%Y %H:%M} (Алматы)"
+    ws["A1"].font = Font(bold=True, size=14)
+    lines = [("Клиенты должны всего", debts["total"], M), ("Должников", debts["n"], M),
+             ("Из долга старше 60 дней", debts["old"], M),
+             ("Доля пяти крупнейших должников", debts["top5_share"], "0%"),
+             ("Не клиенты должны (лист «Прочие долги»)", debts["other_total"], M)]
+    for r, (t, v, f) in enumerate(lines, 3):
+        ws.cell(row=r, column=1, value=t)
+        ws.cell(row=r, column=2, value=v).number_format = f
+    ws.column_dimensions["A"].width = 44
+    ws.column_dimensions["B"].width = 18
+    write_debts(wb, debts)
+    h = wb.create_sheet("Как читать")
+    h.column_dimensions["A"].width = 30
+    h.column_dimensions["B"].width = 100
+    for r, (a, b) in enumerate(DEBT_HELP, 1):
+        h.cell(row=r, column=1, value=a).font = BOLD
+        h.cell(row=r, column=2, value=b).alignment = Alignment(wrap_text=True, vertical="top")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(path)
+    return path
+
+
+DEBT_HELP = [
+    ("Дебиторка", "Клиенты, которые должны нам по балансу взаиморасчётов МойСклад (отгружено больше, чем оплачено). Поставщики не входят."),
+    ("Прочие долги", "Контрагенты с долгом перед нами, которые не клиенты: учредители, инвесторы, сотрудники и другие без клиентских тегов. В дебиторку и её итоги не входят."),
+    ("Возраст долга", "Оценка: оплата гасит самые старые отгрузки первыми, долг относится на самые свежие. «Долг тянется с» — дата самой старой отгрузки, ещё не покрытой оплатой. «Старше года» — долг больше всех отгрузок за год."),
+    ("0–30 / 31–60 / 61–90 / старше 90", "Какая часть долга приходится на отгрузки такого возраста."),
+    ("Внимание", "«Не платит больше 30/60 дней» — столько прошло с последнего платежа. «Нет платежей за год» — ни одного входящего платежа за 12 месяцев."),
+    ("Дней без платежей", "Сколько дней прошло с последнего входящего платежа клиента."),
+    ("Отгружено / оплачено за 90 дн", "Если отгружено заметно больше, чем оплачено, долг растёт."),
+]
+
+
 def debts_html(debts: dict) -> str:
     n = lambda v: "—" if v is None else f"{v:,.0f}".replace(",", " ")  # noqa: E731
     d = lambda v: f"{v:%d.%m.%Y}" if v else "—"  # noqa: E731
@@ -243,7 +282,7 @@ def debts_html(debts: dict) -> str:
             f'На пять крупнейших должников приходится {debts["top5_share"]:.0%} долга.</p>'
             f'{tb}{th}<th align="left">Группа</th><th>Должников</th><th>Долг</th><th>Из него старше 60 дней</th></tr>{grp}</table>'
             + (f'<p style="color:#777;font-size:12px">Не клиенты (учредители, инвесторы, сотрудники и т.п.) должны ещё '
-               f'{n(debts["other_total"])} — они на листе «Прочие долги» и в эту сумму не входят.</p>' if debts["other_total"] else "") +
+               f'{n(debts["other_total"])} — они на листе «Прочие долги» файла «Дебиторка» и в эту сумму не входят.</p>' if debts["other_total"] else "") +
             f'<p><b>Топ-10 должников</b></p>'
             f'{tb}{th}<th align="left">Клиент</th><th>Группа</th><th>Долг</th><th>Возраст долга, дней</th>'
             f'<th>Последний платёж</th><th>Дней без платежей</th></tr>{top}</table>')
@@ -290,7 +329,7 @@ def _matrix(ws, rep, first, rows, top, fmt=M, share=True, width0=28):
     return r
 
 
-def write_sales(rep: dict, path: Path, debts: dict | None = None) -> Path:
+def write_sales(rep: dict, path: Path) -> Path:
     G, groups, today = rep["G"], rep["groups"], rep["today"]
     wb = Workbook()
     ws = wb.active
@@ -359,8 +398,6 @@ def write_sales(rep: dict, path: Path, debts: dict | None = None) -> Path:
             w.cell(row=r, column=x + 2, value=c["last"]).number_format = "DD.MM.YYYY"
             w.cell(row=r, column=x + 3, value=(today - c["last"]).days if c["last"] else None)
 
-    if debts:
-        write_debts(wb, debts)
     h = wb.create_sheet("Как читать")
     h.column_dimensions["A"].width = 30
     h.column_dimensions["B"].width = 100
@@ -375,11 +412,6 @@ def write_sales(rep: dict, path: Path, debts: dict | None = None) -> Path:
         ("Итого 12 мес", "12 полных месяцев до текущего; текущий месяц показан отдельной колонкой и в итог не входит."),
         ("Активные клиенты", "Сколько разных клиентов купили в месяце хотя бы раз."),
         ("Средний чек", "Отгрузки ÷ число документов отгрузки."),
-        ("Дебиторка", "Клиенты, которые должны нам по балансу взаиморасчётов МойСклад (отгружено больше, чем оплачено). Поставщики не входят."),
-        ("Прочие долги", "Контрагенты с долгом перед нами, которые не клиенты: учредители, инвесторы, сотрудники и другие без клиентских тегов. В дебиторку и её итоги не входят."),
-        ("Возраст долга", "Оценка: долг относится на самые свежие отгрузки, более старые считаются оплаченными. «Долг тянется с» — дата самой старой отгрузки, которая ещё не покрыта оплатой. «Старше года» — долг больше всех отгрузок за год."),
-        ("0–30 / 31–60 / 61–90 / старше 90", "Какая часть долга приходится на отгрузки такого возраста."),
-        ("Дней без платежей", "Сколько дней прошло с последнего входящего платежа клиента. Пусто — платежей за год не было."),
         ("Листы по группам", "Каждый клиент по месяцам, сортировка по сумме за 12 месяцев; справа — число отгрузок, месяцев с покупками, последняя отгрузка и дней без покупок."),
     ], 1):
         h.cell(row=r, column=1, value=a).font = BOLD
