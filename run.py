@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from msreport import analytics, demo, excel, manual
+from msreport import analytics, demo, excel, manual, sales
 from msreport.api import ApiError, MoySklad
 from msreport.fetch import fetch_all
 
@@ -61,10 +61,16 @@ def main() -> int:
     name = f"Отчет_закуп_логистика_{today:%Y-%m-%d_%H%M}{'_ДЕМО' if args.demo else ''}.xlsx"
     out = Path(args.out) if args.out else ROOT / cfg["files"]["reports_dir"] / name
     excel.write_report(rep, out)
+    srep = sales.build_sales(raw, cfg, today)
+    sout = out.with_name(out.name.replace("Отчет_закуп_логистика", "Продажи_по_клиентам"))
+    if sout == out:
+        sout = out.with_name("Продажи_" + out.name)
+    debts = sales.build_debts(raw, cfg, today)
+    sales.write_sales(srep, sout, debts)
 
     if args.html:
         from msreport import mail
-        Path(args.html).write_text(mail.summary_html(rep), encoding="utf-8")
+        Path(args.html).write_text(mail.summary_html(rep, srep, debts), encoding="utf-8")
         print(f"Текст письма: {args.html}")
 
     to = [a.strip() for a in (args.email or os.environ.get("MAIL_TO", "")).split(",") if a.strip()]
@@ -80,6 +86,7 @@ def main() -> int:
 
     k = rep["kpi"]
     print(f"\nГотово: {out}")
+    print(f"Продажи и дебиторка: {sout}")
     print(f"Запас {k['stock_value']:,.0f} | заморожено {k['frozen']:,.0f} ({k['frozen_share']:.0%}) | "
           f"депозиты у заводов {k['deposits'] or 0:,.0f} | наш долг заводам {k['debts'] or 0:,.0f} | "
           f"срочно заказать {k['urgent_sku']} поз.".replace(",", " "))

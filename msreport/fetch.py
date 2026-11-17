@@ -116,8 +116,19 @@ def fetch_all(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
     for o in orders:
         o["positions_rows"] = ms.rows(f"entity/purchaseorder/{o['id']}/positions")
 
+    log("Продажи по клиентам за год…")
+    from .sales import first_month
+    s0 = first_month(today).strftime(FMT)
+    sales_docs = {k: [{"moment": d["moment"], "sum": d.get("sum") or 0, "agent": {"meta": {"href": d["agent"]["meta"]["href"]}},
+                       "applicable": d.get("applicable")} for d in ms.rows(f"entity/{k}", {"filter": f"moment>={s0}"})]
+                  for k in ("demand", "salesreturn", "retaildemand", "retailsalesreturn")}
+
+    pay_in = [{"moment": d["moment"], "sum": d.get("sum") or 0, "agent": {"meta": {"href": d["agent"]["meta"]["href"]}},
+               "applicable": d.get("applicable")}
+              for k in ("paymentin", "cashin") for d in ms.rows(f"entity/{k}", {"filter": f"moment>={s0}"})]
+
     return {
-        "orders": orders, "stores": stores, "counterparties": counterparties, "balances": balances, "stock_all": stock_all,
+        "pay_in": pay_in, "sales_docs": sales_docs, "orders": orders, "stores": stores, "counterparties": counterparties, "balances": balances, "stock_all": stock_all,
         "stock_bystore": stock_bystore, "sales30": sales30, "sales90": sales90, "sales90_by_store": by_store,
         "bazaar30": baz30, "bazaar90": baz90, "bazaar_in90": bazaar_in, "bazaar_ids": sorted(bazaar_ids),
         "sales_source": source, "supplies": supplies, "payments": payments,

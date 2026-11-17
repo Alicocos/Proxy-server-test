@@ -176,3 +176,64 @@ def test_mail_payload(tmp_path):
     assert j["attachment"][0]["name"] == "r.xlsx" and len(j["attachment"][0]["content"]) > 1000
     assert "Срочно заказать" in j["htmlContent"] and "00001" in j["htmlContent"]  # просроченный демо-заказ
     assert "Больше всего заморожено" in j["htmlContent"]
+
+
+def test_sales_by_groups(tmp_path):
+    from msreport import sales
+    ag = lambda i: {"agent": {"meta": {"href": f"{H}/counterparty/{i}"}}}  # noqa: E731
+    r = {"counterparties": [{"id": S1, "name": "А", "tags": ["клиенты", "Сержан клиент"]},
+                            {"id": S2, "name": "Б", "tags": ["клиенты"]}, {"id": PID, "name": "В", "tags": ["сотрудники"]}],
+         "sales_docs": {"demand": [
+             {"moment": "2026-11-12 09:00:00.000", "sum": 100000, **ag(S1)},   # сегодня
+             {"moment": "2026-11-11 09:00:00.000", "sum": 50000, **ag(S1)},    # вчера
+             {"moment": "2026-11-02 09:00:00.000", "sum": 30000, **ag(S2)},    # месяц с начала
+             {"moment": "2026-10-05 09:00:00.000", "sum": 70000, **ag(S2)},    # прошлый месяц за те же дни
+             {"moment": "2026-10-20 09:00:00.000", "sum": 900000, **ag(S2)},   # прошлый месяц, позже 12-го
+             {"moment": "2026-11-05 09:00:00.000", "sum": 1000, **ag(PID)},
+             {"moment": "2025-10-31 09:00:00.000", "sum": 999999, **ag(S1)},   # раньше окна
+             {"moment": "2026-11-10 09:00:00.000", "sum": 555, "applicable": False, **ag(S1)}],
+          "salesreturn": [{"moment": "2026-11-12 10:00:00.000", "sum": 20000, **ag(S1)}]}}
+    rep = sales.build_sales(r, CFG, TODAY)
+    assert rep["months"][0] == "2025-11" and rep["cur"] == "2026-11" and len(rep["full"]) == 12
+    s, o = rep["G"]["Сержан клиенты"], rep["G"]["Общие клиенты"]
+    assert (s["periods"]["today"]["net"], s["periods"]["yesterday"]["net"], s["periods"]["mtd"]["net"]) == (800, 500, 1300)
+    assert (s["periods"]["mtd"]["n"], s["periods"]["mtd"]["clients"], s["total"]) == (2, 1, 0)
+    assert (o["periods"]["mtd"]["net"], o["periods"]["prev_mtd"]["net"], o["total"]) == (300, 700, 9700)
+    assert rep["G"]["Прочие"]["periods"]["mtd"]["net"] == 10 and "Прочие" in rep["groups"]
+    assert "Данияр клиенты" in rep["groups"] and rep["G"]["Данияр клиенты"]["clients"] == 0
+    html = sales.html_section(rep)
+    assert "Сержан клиенты" in html and "-57%" in html  # 300 к 700 у общих клиентов
+    out = sales.write_sales(rep, tmp_path / "s.xlsx")
+    from openpyxl import load_workbook
+    wb = load_workbook(out)
+    assert {"Сводка", "Отгрузки", "Возвраты", "Сержан клиенты", "Общие клиенты", "Как читать"} <= set(wb.sheetnames)
+    full = sales.build_sales(demo.demo_raw(TODAY), CFG, TODAY)
+    assert full["total"] > 0 and len(full["groups"]) == 5
+
+
+def test_debts(tmp_path):
+    from msreport import sales
+    ag = lambda i: {"agent": {"meta": {"href": f"{H}/counterparty/{i}"}}}  # noqa: E731
+    r = {"counterparties": [{"id": S1, "name": "Должник", "tags": ["клиенты", "данияр клиент"]},
+                            {"id": S2, "name": "Завод", "tags": ["поставщики китай"]},
+                            {"id": PID, "name": "Переплатил", "tags": ["клиенты"]}],
+         "balances": {S1: -50000000, S2: -9900000, PID: 7700000},
+         "sales_docs": {"demand": [{"moment": "2026-11-02 09:00:00.000", "sum": 20000000, **ag(S1)},   # 10 дней
+                                   {"moment": "2026-09-23 09:00:00.000", "sum": 20000000, **ag(S1)},   # 50 дней
+                                   {"moment": "2026-07-01 09:00:00.000", "sum": 30000000, **ag(S1)}]},  # 134 дня
+         "pay_in": [{"moment": "2026-09-01 09:00:00.000", "sum": 5000000, **ag(S1)},
+                    {"moment": "2026-08-01 09:00:00.000", "sum": 1000000, **ag(S1)}]}
+    d = sales.build_debts(r, CFG, TODAY)
+    assert d["n"] == 1 and d["total"] == 500000  # завод и переплативший клиент — не должники
+    x = d["rows"][0]
+    assert (x["group"], x["b0"], x["b1"], x["b2"], x["b3"]) == ("Данияр клиенты", 200000, 200000, 0, 100000)
+    assert (x["age"], x["no_pay_days"], x["last_pay_sum"], x["flag"]) == (134, 72, 50000, "не платит больше 60 дней")
+    assert d["old"] == 100000 and d["by_group"][0]["group"] == "Данияр клиенты"
+    r["balances"][S1] = -90000000  # долг больше отгрузок за год
+    x = sales.build_debts(r, CFG, TODAY)["rows"][0]
+    assert x["age"] is None and x["age_text"] == "старше года" and x["b3"] == 500000
+    assert sales.build_debts({**r, "balances": None}, CFG, TODAY) is None
+    assert "Должник" in sales.debts_html(d)
+    out = sales.write_sales(sales.build_sales(r, CFG, TODAY), tmp_path / "s.xlsx", d)
+    from openpyxl import load_workbook
+    assert load_workbook(out).sheetnames[:3] == ["Сводка", "Дебиторка", "Дебиторка по группам"]

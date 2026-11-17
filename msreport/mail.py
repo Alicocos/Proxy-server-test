@@ -17,7 +17,7 @@ def _fmt(v, pct=False):
     return f"{v:.0%}" if pct else f"{v:,.0f}".replace(",", " ")
 
 
-def summary_html(rep: dict) -> str:
+def summary_html(rep: dict, sales: dict | None = None, debts: dict | None = None) -> str:
     """Текст письма: главные цифры и три короткие таблицы. Без вложения — Excel остаётся в чате."""
     from . import analytics as a
     k = rep["kpi"]
@@ -55,6 +55,12 @@ def summary_html(rep: dict) -> str:
         table(["Товар", "Статус", "Запас, дней", "Заморожено"],
               [[p["name"], p["status"], _fmt(p["cover"]), _fmt(p["frozen"])] for p in frozen]),
     ]
+    if sales:
+        from .sales import html_section
+        parts.append(html_section(sales))
+    if debts:
+        from .sales import debts_html
+        parts.append(debts_html(debts))
     if late:
         parts += ["<h3>Заказы поставщикам, требующие внимания</h3>",
                   table(["Заказ", "Завод", "Статус", "Ещё не принято"],
@@ -65,8 +71,8 @@ def summary_html(rep: dict) -> str:
                         [[s["agent"], _fmt(s["deposit"]),
                           _fmt(s["days_no_sup"]) if s["days_no_sup"] is not None else "приёмок за год не было"] for s in stale])]
     parts.append('<p style="color:#777;font-size:12px">«Хватит, дней» — на сколько дней хватит остатка вместе с товаром в пути. '
-                 "«Заморожено» — сумма сверх нормы запаса или весь остаток без продаж за 90 дней. "
-                 "Полный отчёт в Excel — в чате Claude «Отчетность логистики и закупок».</p></div>")
+                 "«Заморожено» — сумма сверх нормы запаса или весь остаток без продаж за 90 дней. Продажи — отгрузки минус возвраты по дате документа. "
+                 "Полные отчёты — в двух файлах Excel во вложении.</p></div>")
     return "".join(parts)
 
 

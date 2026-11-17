@@ -94,7 +94,19 @@ def demo_raw(today: datetime) -> dict:
         {"name": "00004", "moment": f(90), "sum": 1, "rate": cny, "state": {"name": "Полный келди"},
          **agent(factories[1]), "positions_rows": [pos(stock_all[30], 300, 0)]},
     ]
-    return {"orders": orders, "counterparties": factories + [baz, other], "balances": balances, "supplies": supplies,
+    buyers = [{"id": uid(), "name": f"Клиент {i}", "tags": ["клиенты"] + [["сержан клиент"], ["данияр клиент"], ["алдияр клиенты"], []][i % 4]}
+              for i in range(24)]
+    sdocs = {"demand": [], "salesreturn": []}
+    for day in range(0, 390):
+        for _ in range(3):
+            b = rnd.choice(buyers + [baz])
+            sdocs["demand"].append({"moment": f(day), "sum": rnd.randint(5, 300) * 1000000, **agent(b)})
+        if day % 9 == 0:
+            sdocs["salesreturn"].append({"moment": f(day), "sum": rnd.randint(1, 20) * 1000000, **agent(rnd.choice(buyers))})
+    for i, b in enumerate(buyers):
+        balances[b["id"]] = -rnd.randint(1, 40) * 100000000 if i % 3 else 0
+    pay_in = [{"moment": f(rnd.randint(1, 300)), "sum": rnd.randint(5, 300) * 1000000, **agent(b)} for b in buyers[:18] for _ in range(4)]
+    return {"pay_in": pay_in, "sales_docs": sdocs, "orders": orders, "counterparties": factories + [baz, other] + buyers, "balances": balances, "supplies": supplies,
             "payments": payments, "bazaar30": bz(s30), "bazaar90": bz(s90), "bazaar_in90": 9000000000,
             "bazaar_ids": [baz["id"]], "sales_source": "демо",
             "stores": stores, "stock_all": stock_all, "stock_bystore": bystore, "sales30": s30, "sales90": s90,
