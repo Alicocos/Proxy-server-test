@@ -112,7 +112,7 @@ def fetch_all(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
                 f"entity/{kind}", {"filter": f"moment>={t90};agent={c['meta']['href']}"}))
 
     log("Заказы поставщикам…")
-    orders = ms.rows("entity/purchaseorder", {"filter": f"moment>={cfg['orders']['since']} 00:00:00", "expand": "state"})
+    orders = ms.rows("entity/purchaseorder", {"filter": f"created>={cfg['orders']['since']} 00:00:00", "expand": "state"})
     for o in orders:
         o["positions_rows"] = ms.rows(f"entity/purchaseorder/{o['id']}/positions")
 
