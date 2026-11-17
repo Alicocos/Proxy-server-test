@@ -105,12 +105,16 @@ def test_transit_from_purchase_orders():
          "positions_rows": [pos(40, 0)]},                                                              # закрыт статусом
         {"name": "4", "moment": "2026-11-06 00:00:00.000", "applicable": False, "positions_rows": [pos(40, 0)]},
     ]
-    transit, etas, rows = a.build_orders(r, CFG, TODAY)
+    # по умолчанию статус не важен: проведённый заказ 3 тоже в пути, непроведённый 4 — нет
+    transit, _, rows = a.build_orders(r, CFG, TODAY)
+    assert transit == {PID: 110} and [o["name"] for o in rows] == ["1", "3"]
+    CLOSED = {**CFG, "orders": {**CFG["orders"], "closed_states": ["полный келди"]}}
+    transit, etas, rows = a.build_orders(r, CLOSED, TODAY)
     assert transit == {PID: 70} and etas[PID] == datetime(2026, 11, 10)
     assert len(rows) == 1
     o = rows[0]
     assert (o["agent"], o["left_qty"], o["left_sum"], o["overdue"], o["status"]) == ("Завод", 70, 70 * 10 * 70, 2, "Просрочен")
-    rep = a.build_report({**r, "supplies": []}, [], CFG, TODAY)
+    rep = a.build_report({**r, "supplies": []}, [], CLOSED, TODAY)
     p = rep["products"][0]
     assert (p["transit"], p["status"], p["eta"]) == (70, a.OK, datetime(2026, 11, 10))
     assert (rep["kpi"]["orders_open"], rep["kpi"]["orders_overdue"], rep["kpi"]["transit_sku"]) == (1, 1, 1)
@@ -146,7 +150,7 @@ def test_demo_end_to_end(tmp_path):
     tpl = tmp_path / "in" / "logistics.xlsx"
     assert manual.read_logistics(tpl) == [] and tpl.exists()  # шаблон создаётся и читается
     rep = a.build_report(demo.demo_raw(TODAY), demo.demo_logistics(TODAY), CFG, TODAY)
-    assert (rep["kpi"]["orders_open"], rep["kpi"]["orders_overdue"], rep["kpi"]["orders_noplan"]) == (3, 1, 1)
+    assert (rep["kpi"]["orders_open"], rep["kpi"]["orders_overdue"], rep["kpi"]["orders_noplan"]) == (4, 1, 2)
     k = rep["kpi"]
     assert k["stock_value"] > 0 and 0 < k["frozen_share"] < 1 and k["deposits"] > 0 and k["baz_sum"] > 0 and len(rep["monthly"]) > 3 and k["ship_overdue"] == 1
     assert abs(sum(s["stock_value"] for s in rep["stores"]) - k["stock_value"] - k["excluded_value"]) < 1
