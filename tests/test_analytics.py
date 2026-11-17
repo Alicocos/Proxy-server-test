@@ -241,3 +241,9 @@ def test_debts(tmp_path):
     out = sales.write_sales(sales.build_sales(r, CFG, TODAY), tmp_path / "s.xlsx", d)
     from openpyxl import load_workbook
     assert load_workbook(out).sheetnames[:3] == ["Сводка", "Дебиторка", "Дебиторка по группам"]
+    r["counterparties"].append({"id": "c" * 36, "name": "Учредитель", "tags": ["учредитель"]})
+    r["balances"]["c" * 36] = -70000000
+    d = sales.build_debts(r, CFG, TODAY)
+    assert (d["n"], d["other_total"], d["other"][0]["name"]) == (1, 700000, "Учредитель")  # не клиент — отдельно
+    out = sales.write_sales(sales.build_sales(r, CFG, TODAY), tmp_path / "s2.xlsx", d)
+    assert "Прочие долги" in load_workbook(out).sheetnames and "700 000" in sales.debts_html(d)

@@ -34,6 +34,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--demo", action="store_true", help="выдуманные данные вместо МойСклад")
     ap.add_argument("--out", help="путь к файлу отчёта")
+    ap.add_argument("--save-raw", help="сохранить выгрузку из МойСклад в файл (для отладки без повторной выгрузки)")
+    ap.add_argument("--raw", help="взять выгрузку из файла, сохранённого --save-raw, вместо обращения к МойСклад")
     ap.add_argument("--html", help="сохранить текст письма (HTML) в этот файл")
     ap.add_argument("--email", help="отправить отчёт на эти адреса (через запятую); можно задать MAIL_TO")
     ap.add_argument("--sender", help="адрес отправителя, подтверждённый в Brevo; можно задать MAIL_FROM")
@@ -45,16 +47,24 @@ def main() -> int:
     if args.demo:
         raw, logistics = demo.demo_raw(today), demo.demo_logistics(today)
     else:
-        tok = token()
-        if not tok:
-            print("Не найден MOYSKLAD_TOKEN. Задайте переменную окружения или создайте файл .env "
-                  "со строкой MOYSKLAD_TOKEN=ваш_токен. Для пробы: python run.py --demo", file=sys.stderr)
-            return 2
-        try:
-            raw = fetch_all(MoySklad(tok), cfg, today)
-        except ApiError as e:
-            print(f"Ошибка: {e}", file=sys.stderr)
-            return 1
+        if args.raw:
+            import pickle
+            saved = pickle.loads(Path(args.raw).read_bytes())
+            raw, today = saved["raw"], saved["today"]
+        else:
+            tok = token()
+            if not tok:
+                print("Не найден MOYSKLAD_TOKEN. Задайте переменную окружения или создайте файл .env "
+                      "со строкой MOYSKLAD_TOKEN=ваш_токен. Для пробы: python run.py --demo", file=sys.stderr)
+                return 2
+            try:
+                raw = fetch_all(MoySklad(tok), cfg, today)
+            except ApiError as e:
+                print(f"Ошибка: {e}", file=sys.stderr)
+                return 1
+            if args.save_raw:
+                import pickle
+                Path(args.save_raw).write_bytes(pickle.dumps({"raw": raw, "today": today}))
         logistics = manual.read_logistics(ROOT / cfg["files"]["logistics"])
 
     rep = analytics.build_report(raw, logistics, cfg, today)

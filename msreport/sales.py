@@ -159,12 +159,15 @@ def build_debts(raw: dict, cfg: dict, today: datetime) -> dict | None:
                      else "не платит больше 30 дней" if (today - pa[0][0]).days > 30 else ""),
         })
     rows.sort(key=lambda r: -r["debt"])
-    names = [g for g, _ in groups] + [OTHER]
+    other = [r for r in rows if r["group"] == OTHER]  # не клиенты: учредители, инвесторы, сотрудники и т.п.
+    rows = [r for r in rows if r["group"] != OTHER]
+    names = [g for g, _ in groups]
     by_group = [{"group": g, "n": sum(1 for r in rows if r["group"] == g),
                  **{k: sum(r[k] for r in rows if r["group"] == g) for k in ("debt", "b0", "b1", "b2", "b3")}} for g in names]
     by_group = [g for g in by_group if g["n"]]
     total = sum(r["debt"] for r in rows)
     return {"today": today, "rows": rows, "by_group": by_group, "total": total,
+            "other": other, "other_total": sum(r["debt"] for r in other),
             "old": sum(r["b2"] + r["b3"] for r in rows), "n": len(rows),
             "top5_share": sum(r["debt"] for r in rows[:5]) / total if total else 0}
 
@@ -178,17 +181,25 @@ def write_debts(wb, debts: dict) -> None:
             ("Сумма последнего платежа", "last_pay_sum", 13, M), ("Дней без платежей", "no_pay_days", 10, "0"),
             ("Последняя отгрузка", "last_ship", 12, D), ("Дней без отгрузок", "no_ship_days", 10, "0"),
             ("Отгружено за 90 дн", "ship90", 14, M), ("Оплачено за 90 дн", "pay90", 14, M)]
-    ws = wb.create_sheet("Дебиторка", 1)
-    _head(ws, [c[0] for c in cols], [c[2] for c in cols])
     red = PatternFill("solid", fgColor="F8CBAD")
-    for r, row in enumerate(debts["rows"], 2):
+    for pos, (title, data) in enumerate((("Дебиторка", debts["rows"]), ("Прочие долги", debts["other"])), 1):
+        if title == "Прочие долги" and not data:
+            continue
+        ws = wb.create_sheet(title, pos if pos == 1 else 3)
+        _debt_sheet(ws, cols, data, red)
+    _debt_groups(wb, debts)
+
+
+def _debt_sheet(ws, cols, data, red):
+    _head(ws, [c[0] for c in cols], [c[2] for c in cols])
+    for r, row in enumerate(data, 2):
         for i, (_, k, _, f) in enumerate(cols, 1):
             c = ws.cell(row=r, column=i, value=row[k] or None if k.startswith("b") else row[k])
             if f:
                 c.number_format = f
             if k == "flag" and row[k]:
                 c.fill = red
-    n = len(debts["rows"]) + 2
+    n = len(data) + 2
     ws.cell(row=n, column=1, value="ИТОГО").font = BOLD
     for i, (_, k, _, f) in enumerate(cols, 1):
         if k in ("debt", "b0", "b1", "b2", "b3", "ship90", "pay90"):
@@ -196,8 +207,11 @@ def write_debts(wb, debts: dict) -> None:
             c = ws.cell(row=n, column=i, value=f"=SUM({col}2:{col}{n - 1})")
             c.font, c.number_format = BOLD, M
     ws.freeze_panes = "B2"
-    if debts["rows"]:
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{len(debts['rows']) + 1}"
+    if data:
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(cols))}{len(data) + 1}"
+
+
+def _debt_groups(wb, debts):
     g = wb.create_sheet("Дебиторка по группам", 2)
     _head(g, ["Группа", "Должников", "Долг"] + BUCKETS + ["Доля старше 60 дней"], [28, 11, 15, 14, 14, 14, 14, 12])
     for r, row in enumerate(debts["by_group"], 2):
@@ -228,6 +242,8 @@ def debts_html(debts: dict) -> str:
             f'<p>Должников: {debts["n"]}. Из долга старше 60 дней: {n(debts["old"])}. '
             f'На пять крупнейших должников приходится {debts["top5_share"]:.0%} долга.</p>'
             f'{tb}{th}<th align="left">Группа</th><th>Должников</th><th>Долг</th><th>Из него старше 60 дней</th></tr>{grp}</table>'
+            + (f'<p style="color:#777;font-size:12px">Не клиенты (учредители, инвесторы, сотрудники и т.п.) должны ещё '
+               f'{n(debts["other_total"])} — они на листе «Прочие долги» и в эту сумму не входят.</p>' if debts["other_total"] else "") +
             f'<p><b>Топ-10 должников</b></p>'
             f'{tb}{th}<th align="left">Клиент</th><th>Группа</th><th>Долг</th><th>Возраст долга, дней</th>'
             f'<th>Последний платёж</th><th>Дней без платежей</th></tr>{top}</table>')
@@ -360,6 +376,7 @@ def write_sales(rep: dict, path: Path, debts: dict | None = None) -> Path:
         ("Активные клиенты", "Сколько разных клиентов купили в месяце хотя бы раз."),
         ("Средний чек", "Отгрузки ÷ число документов отгрузки."),
         ("Дебиторка", "Клиенты, которые должны нам по балансу взаиморасчётов МойСклад (отгружено больше, чем оплачено). Поставщики не входят."),
+        ("Прочие долги", "Контрагенты с долгом перед нами, которые не клиенты: учредители, инвесторы, сотрудники и другие без клиентских тегов. В дебиторку и её итоги не входят."),
         ("Возраст долга", "Оценка: долг относится на самые свежие отгрузки, более старые считаются оплаченными. «Долг тянется с» — дата самой старой отгрузки, которая ещё не покрыта оплатой. «Старше года» — долг больше всех отгрузок за год."),
         ("0–30 / 31–60 / 61–90 / старше 90", "Какая часть долга приходится на отгрузки такого возраста."),
         ("Дней без платежей", "Сколько дней прошло с последнего входящего платежа клиента. Пусто — платежей за год не было."),
