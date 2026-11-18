@@ -19,6 +19,60 @@ def first_month(today: datetime) -> datetime:
     return datetime(today.year - 1, today.month, 1)
 
 
+def yoy_start(today: datetime) -> datetime:
+    """Начало окна для сверки год к году: тот же месяц два года назад."""
+    return datetime(today.year - 2, today.month, 1)
+
+
+def build_yoy(raw: dict, cfg: dict, today: datetime) -> dict:
+    """Сверка по месяцам: каждый из последних 13 месяцев против того же месяца годом раньше.
+
+    Текущий месяц сравнивается с теми же днями прошлого года, чтобы неполный месяц не выглядел провалом.
+    """
+    groups = [(g["name"], g["tag"].lower()) for g in cfg["sales"]["groups"]]
+    names = [g for g, _ in groups] + [OTHER]
+    cp = {c["id"]: c for c in raw.get("counterparties", [])}
+
+    def group(aid):
+        tags = {t.lower() for t in cp.get(aid, {}).get("tags", [])}
+        return next((g for g, tag in groups if tag in tags), OTHER)
+
+    cur = f"{today.year}-{today.month:02d}"
+    months = _months(today)  # 13 месяцев: с того же месяца прошлого года по текущий
+    prev = lambda m: f"{int(m[:4]) - 1}{m[4:]}"  # noqa: E731
+    net = defaultdict(float)  # (группа, месяц) -> сумма
+    first_doc = None
+    for kind, sign in (("demand", 1), ("retaildemand", 1), ("salesreturn", -1), ("retailsalesreturn", -1)):
+        for d in raw.get("sales_docs", {}).get(kind, []):
+            if d.get("applicable") is False:
+                continue
+            m = UUID.search((d.get("agent") or {}).get("meta", {}).get("href", ""))
+            if not m:
+                continue
+            first_doc = min(first_doc or d["moment"], d["moment"])
+            ym, day = d["moment"][:7], int(d["moment"][8:10])
+            # для прошлогоднего «текущего месяца» берём только те же дни
+            if ym == prev(cur) and day > today.day:
+                ym = ym + "+"
+            net[(group(m.group(0)), ym)] += sign * (d.get("sum") or 0) / 100
+    has = lambda m: bool(first_doc) and first_doc[:7] <= m  # noqa: E731
+    rows = []
+    for m in months:
+        pm = prev(m)
+        row = {"month": m, "prev_month": pm, "partial": m == cur, "has_prev": has(pm)}
+        for g in names + ["ИТОГО"]:
+            gs = names if g == "ИТОГО" else [g]
+            a = sum(net[(x, m)] for x in gs)
+            b = sum(net[(x, pm)] for x in gs)
+            row[g] = (a, b if row["has_prev"] else None)
+        rows.append(row)
+    full = [r for r in rows if not r["partial"]][-12:]
+    year = {g: (sum(r[g][0] for r in full), sum(r[g][1] or 0 for r in full) if all(r["has_prev"] for r in full) else None)
+            for g in names + ["ИТОГО"]}
+    shown = [g for g in names if g != OTHER or any(r[g][0] or (r[g][1] or 0) for r in rows)]
+    return {"today": today, "rows": rows, "groups": shown, "year": year, "first_doc": first_doc}
+
+
 def _months(today: datetime) -> list[str]:
     out, y, m = [], today.year - 1, today.month
     for _ in range(13):
@@ -288,6 +342,72 @@ def debts_html(debts: dict) -> str:
             f'<th>Последний платёж</th><th>Дней без платежей</th></tr>{top}</table>')
 
 
+def _pct(a, b):
+    return (a / b - 1) if b and b > 0 else None
+
+
+def write_yoy(wb, yoy: dict, index: int = 1) -> None:
+    ws = wb.create_sheet("Сверка по месяцам", index)
+    today = yoy["today"]
+    ws["A1"] = "Сверка по месяцам: этот год против того же месяца прошлого года"
+    ws["A1"].font = Font(bold=True, size=14)
+    ws["A2"] = (f"Чистые продажи (отгрузки минус возвраты), тенге. Текущий месяц сравнивается с 1–{today.day} числом "
+                "того же месяца прошлого года. «нет данных» — в МойСклад нет документов за тот период.")
+    cols = ["ИТОГО"] + yoy["groups"]
+    heads = ["Месяц"]
+    for g in cols:
+        heads += [f"{g}: этот год", "прошлый год", "изменение"]
+    _head(ws, heads, [22] + [14, 14, 10] * len(cols), 4)
+    rows = yoy["rows"] + [None]
+    for r, row in enumerate(rows, 5):
+        if row is None:
+            title = "12 полных месяцев"
+            vals = [yoy["year"][g] for g in cols]
+        else:
+            m = row["month"]
+            title = f"{RU[int(m[5:]) - 1]} {m[:4]} vs {m[:4] and int(m[:4]) - 1}" + (f" (1–{today.day})" if row["partial"] else "")
+            vals = [row[g] for g in cols]
+        c = ws.cell(row=r, column=1, value=title)
+        if row is None:
+            c.font = BOLD
+        for j, (a, b) in enumerate(vals):
+            col = 2 + j * 3
+            ws.cell(row=r, column=col, value=a).number_format = M
+            ws.cell(row=r, column=col + 1, value=b if b is not None else "нет данных").number_format = M
+            p = _pct(a, b)
+            cc = ws.cell(row=r, column=col + 2, value=p)
+            cc.number_format = "+0%;-0%;0%"
+            if p is not None:
+                cc.fill = PatternFill("solid", fgColor="C6E0B4" if p >= 0 else "F8CBAD")
+            if row is None:
+                for k in range(3):
+                    ws.cell(row=r, column=col + k).font = BOLD
+    ws.freeze_panes = "B5"
+
+
+def yoy_html(yoy: dict) -> str:
+    n = lambda v: "нет данных" if v is None else f"{v:,.0f}".replace(",", " ")  # noqa: E731
+    pc = lambda a, b: f"{_pct(a, b):+.0%}" if _pct(a, b) is not None else "—"  # noqa: E731
+    cur, last = yoy["rows"][-1], [r for r in yoy["rows"] if not r["partial"]][-1]
+    lab = lambda m: f"{RU[int(m[5:]) - 1]} {m[:4]}"  # noqa: E731
+    hdr = (f"<th align='left'>Группа</th><th>{lab(cur['month'])} (1–{yoy['today'].day})</th>"
+           f"<th>{lab(cur['prev_month'])} (1–{yoy['today'].day})</th><th>Изм.</th>"
+           f"<th>{lab(last['month'])}</th><th>{lab(last['prev_month'])}</th><th>Изм.</th>")
+    body = ""
+    for g in ["ИТОГО"] + yoy["groups"]:
+        a, b = cur[g]
+        c, d = last[g]
+        b_ = "<b>" if g == "ИТОГО" else ""
+        e_ = "</b>" if g == "ИТОГО" else ""
+        body += (f"<tr><td>{b_}{g}{e_}</td><td align='right'>{b_}{n(a)}{e_}</td><td align='right'>{n(b)}</td>"
+                 f"<td align='right'>{pc(a, b)}</td><td align='right'>{b_}{n(c)}{e_}</td><td align='right'>{n(d)}</td>"
+                 f"<td align='right'>{pc(c, d)}</td></tr>")
+    return ("<h3>Сверка с прошлым годом</h3>"
+            '<table border="1" cellpadding="4" style="border-collapse:collapse;font-size:13px;border-color:#ddd">'
+            f'<tr style="background:#1F4E78;color:#fff">{hdr}</tr>{body}</table>'
+            "<p style='color:#777;font-size:12px'>Все 13 месяцев с прошлым годом — на листе «Сверка по месяцам».</p>")
+
+
 def label(m: str, rep: dict) -> str:
     return f"{RU[int(m[5:]) - 1]} {m[:4]}" + (f" (по {rep['today']:%d.%m})" if m == rep["cur"] else "")
 
@@ -329,7 +449,7 @@ def _matrix(ws, rep, first, rows, top, fmt=M, share=True, width0=28):
     return r
 
 
-def write_sales(rep: dict, path: Path) -> Path:
+def write_sales(rep: dict, path: Path, yoy: dict | None = None) -> Path:
     G, groups, today = rep["G"], rep["groups"], rep["today"]
     wb = Workbook()
     ws = wb.active
@@ -398,10 +518,13 @@ def write_sales(rep: dict, path: Path) -> Path:
             w.cell(row=r, column=x + 2, value=c["last"]).number_format = "DD.MM.YYYY"
             w.cell(row=r, column=x + 3, value=(today - c["last"]).days if c["last"] else None)
 
+    if yoy:
+        write_yoy(wb, yoy)
     h = wb.create_sheet("Как читать")
     h.column_dimensions["A"].width = 30
     h.column_dimensions["B"].width = 100
     for r, (a, b) in enumerate([
+        ("Сверка по месяцам", "Каждый месяц против того же месяца прошлого года, по группам и итого. Текущий месяц — против тех же дней прошлого года. Внизу — 12 полных месяцев против предыдущих 12."),
         ("Чистые продажи", "Сумма отгрузок минус сумма возвратов покупателей, по ценам отгрузки. Возврат вычитается в день оформления."),
         ("Группы", "По группам (тегам) контрагента в МойСклад, список — в config.toml, раздел [sales]. «Прочие» — покупатели без этих тегов."),
         ("Строи сити", "Отгрузка на базар считается продажей, хотя товар может ещё лежать в ангарах."),

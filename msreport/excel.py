@@ -77,6 +77,11 @@ def _summary(ws, rep):
             ("На исключённых складах (брак)", k["excluded_value"], MONEY, "в анализ закупа не входит"),
             ("Можно перераспределить между складами", k["transfers_value"], MONEY, f"{k['transfers']} перемещений вместо закупа"),
         ]),
+        ("Стокаут", [
+            ("Нет в наличии, позиций", k["so_out"], MONEY, f"продаются, а остатка нет; из них едут: {k['so_out_transit']}"),
+            ("Упущенная выручка в день", k["so_lost_day"], MONEY, "продаж в день × средняя цена по товарам, которых нет"),
+            (f"Скоро кончится (меньше {k['so_days']} дней)", k["so_low"], MONEY, "лист «Стокаут»"),
+        ]),
         ("Закуп", [
             ("Позиций «срочно заказать»", k["urgent_sku"], MONEY, "запас вместе с товаром в пути кончится раньше срока поставки"),
             ("Рекомендовано к заказу", k["rec_value"], MONEY, f"{k['rec_sku']} позиций, по себестоимости"),
@@ -134,6 +139,20 @@ def write_report(rep: dict, path: Path) -> Path:
 
     table(wb.create_sheet("Закуп"), PROD_COLS, rep["products"])
     wb["Закуп"].freeze_panes = "D2"
+
+    so = wb.create_sheet("Стокаут", 1)
+    table(so, [
+        ("Статус", "so_status", 16, None), ("ABC", "abc", 6, None), ("Товар", "name", 40, None),
+        ("Код", "code", 10, None), ("Группа", "folder", 20, None), ("Остаток", "stock", 9, QTY),
+        ("Хватит, дней", "cover", 9, DAYS), ("Продаж в день", "daily", 9, "0.00"),
+        ("Последняя продажа", "last_sale", 12, DATE), ("Дней без товара", "days_out", 9, DAYS),
+        ("Упущенная выручка в день", "lost_day", 14, MONEY), ("Упущено с последней продажи", "lost_total", 15, MONEY),
+        ("В пути, шт", "transit", 10, QTY), ("Ближайший приход", "eta", 12, DATE),
+        ("Заказать, шт", "rec", 10, QTY), ("Продажи 90 дн", "q90", 10, QTY),
+    ], rep["stockout"])
+    for row in so.iter_rows(min_row=2, max_col=1):
+        row[0].fill = FILLS["red" if row[0].value == "Нет в наличии" else "orange"]
+    so.freeze_panes = "D2"
     frozen = sorted((p for p in rep["products"] if p["frozen"] > 0), key=lambda p: -p["frozen"])
     table(wb.create_sheet("Заморозка"), PROD_COLS, frozen)
 
@@ -177,6 +196,8 @@ def write_report(rep: dict, path: Path) -> Path:
         ("Наш долг заводу", "debt", 15, MONEY), ("Внимание", "flag", 24, None),
         ("Оплачено 30 дн", "pay30", 14, MONEY), ("Оплачено 90 дн", "pay90", 14, MONEY),
         ("Оплачено за год", "pay365", 15, MONEY), ("Принято 90 дн", "sup90", 14, MONEY),
+        ("Предоплата внесена с", "dep_since", 12, DATE), ("", "dep_text", 10, None),
+        ("Дней с предоплаты", "dep_days", 10, DAYS),
         ("Принято за год", "sup365", 15, MONEY), ("Последний платёж", "last_pay", 12, DATE),
         ("Последняя приёмка", "last_sup", 12, DATE), ("Дней без приёмок", "days_no_sup", 9, DAYS),
         ("Платежей за год", "payments", 9, MONEY), ("Приёмок за год", "supplies", 9, MONEY),

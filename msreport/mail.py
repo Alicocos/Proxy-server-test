@@ -48,6 +48,12 @@ def summary_html(rep: dict, sales: dict | None = None, debts: dict | None = None
         f'<div style="font-family:Arial,sans-serif;font-size:14px"><p>Отчёт по закупу и логистике на '
         f'{rep["today"]:%d.%m.%Y %H:%M} (Алматы). Суммы в тенге, товар по себестоимости МойСклад.</p>',
         f'<table cellpadding="4" style="border-collapse:collapse;font-size:13px">{head}</table>',
+        f"<h3>Стокаут: нет в наличии {k['so_out']} позиций, упущенная выручка {_fmt(k['so_lost_day'])} в день</h3>",
+        table(["Товар", "Последняя продажа", "Дней без товара", "Упущено в день", "В пути, шт"],
+              [[p["name"], f"{p['last_sale']:%d.%m.%Y}" if p["last_sale"] else "—", _fmt(p["days_out"]),
+                _fmt(p["lost_day"]), _fmt(p["transit"]) if p["transit"] else "—"]
+               for p in [r for r in rep.get("stockout", []) if r["so_status"] == "Нет в наличии"][:15]]),
+        f"<p>Ещё {k['so_low']} позиций кончатся меньше чем через {k['so_days']} дней — лист «Стокаут» в файле.</p>",
         "<h3>Срочно заказать — топ-15 по сумме</h3>",
         table(["Товар", "Остаток", "Хватит, дней", "Заказать, шт", "Сумма"],
               [[p["name"], _fmt(p["stock"]), _fmt(p["cover_transit"]), _fmt(p["rec"]), _fmt(p["rec_value"])] for p in urgent]),
@@ -67,8 +73,9 @@ def summary_html(rep: dict, sales: dict | None = None, debts: dict | None = None
                         [[o["name"], o["agent"], o["status"], _fmt(o["left_sum"])] for o in late])]
     if stale:
         parts += ["<h3>Предоплата без движения</h3>",
-                  table(["Завод", "Депозит", "Дней без приёмок"],
+                  table(["Завод", "Депозит", "Предоплата с", "Дней без приёмок"],
                         [[s["agent"], _fmt(s["deposit"]),
+                          f"{s['dep_since']:%d.%m.%Y}" if s.get("dep_since") else (s.get("dep_text") or "—"),
                           _fmt(s["days_no_sup"]) if s["days_no_sup"] is not None else "приёмок за год не было"] for s in stale])]
     parts.append('<p style="color:#777;font-size:12px">«Хватит, дней» — на сколько дней хватит остатка вместе с товаром в пути. '
                  "«Заморожено» — сумма сверх нормы запаса или весь остаток без продаж за 90 дней. Продажи — отгрузки минус возвраты по дате документа. "

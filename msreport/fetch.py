@@ -59,6 +59,7 @@ def fetch_all(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
     t90 = (today - timedelta(days=90)).strftime(FMT)
     t365 = (today - timedelta(days=365)).strftime(FMT)
 
+    last_sale = {}
     log("Склады и контрагенты…")
     stores = ms.rows("entity/store")
     counterparties = [{"id": c["id"], "name": c.get("name", ""), "tags": c.get("tags", []), "meta": c["meta"]}
@@ -99,6 +100,12 @@ def fetch_all(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
         baz30 = sales_from_docs(*docs, costs, t30, agent_ids=bazaar_ids)
         baz90 = sales_from_docs(*docs, costs, t90, agent_ids=bazaar_ids)
         source = "отгрузки и возвраты (себестоимость — текущая из остатков)"
+        last_sale = {}
+        for d in docs[0]:
+            for p in (d.get("positions") or {}).get("rows", []):
+                pid = _id(p.get("assortment"))
+                if pid and d["moment"] > last_sale.get(pid, ""):
+                    last_sale[pid] = d["moment"]
 
     log("Приёмки и платежи за год…")
     supplies = ms.rows("entity/supply", {"filter": f"moment>={t365}"})
@@ -116,11 +123,12 @@ def fetch_all(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
     for o in orders:
         o["positions_rows"] = ms.rows(f"entity/purchaseorder/{o['id']}/positions")
 
-    log("Продажи по клиентам за год…")
-    from .sales import first_month
+    log("Продажи по клиентам за два года…")
+    from .sales import first_month, yoy_start
     s0 = first_month(today).strftime(FMT)
+    s2 = yoy_start(today).strftime(FMT)
     sales_docs = {k: [{"moment": d["moment"], "sum": d.get("sum") or 0, "agent": {"meta": {"href": d["agent"]["meta"]["href"]}},
-                       "applicable": d.get("applicable")} for d in ms.rows(f"entity/{k}", {"filter": f"moment>={s0}"})]
+                       "applicable": d.get("applicable")} for d in ms.rows(f"entity/{k}", {"filter": f"moment>={s2}"})]
                   for k in ("demand", "salesreturn", "retaildemand", "retailsalesreturn")}
 
     pay_in = [{"moment": d["moment"], "sum": d.get("sum") or 0, "agent": {"meta": {"href": d["agent"]["meta"]["href"]}},
@@ -128,7 +136,7 @@ def fetch_all(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
               for k in ("paymentin", "cashin") for d in ms.rows(f"entity/{k}", {"filter": f"moment>={s0}"})]
 
     return {
-        "pay_in": pay_in, "sales_docs": sales_docs, "orders": orders, "stores": stores, "counterparties": counterparties, "balances": balances, "stock_all": stock_all,
+        "last_sale": last_sale, "pay_in": pay_in, "sales_docs": sales_docs, "orders": orders, "stores": stores, "counterparties": counterparties, "balances": balances, "stock_all": stock_all,
         "stock_bystore": stock_bystore, "sales30": sales30, "sales90": sales90, "sales90_by_store": by_store,
         "bazaar30": baz30, "bazaar90": baz90, "bazaar_in90": bazaar_in, "bazaar_ids": sorted(bazaar_ids),
         "sales_source": source, "supplies": supplies, "payments": payments,

@@ -76,7 +76,8 @@ def main() -> int:
     if sout == out:
         sout = out.with_name("Продажи_" + out.name)
     debts = sales.build_debts(raw, cfg, today)
-    sales.write_sales(srep, sout)
+    yoy = sales.build_yoy(raw, cfg, today)
+    sales.write_sales(srep, sout, yoy)
     dout = None
     if debts:
         dout = sout.with_name(sout.name.replace("Продажи_по_клиентам", "Дебиторка"))
@@ -91,7 +92,7 @@ def main() -> int:
                                     f'{today:%d.%m.%Y %H:%M} (Алматы). Полный отчёт — в файле Excel во вложении.</p>{body}</div>')
         base = Path(args.html)
         base.write_text(mail.summary_html(rep), encoding="utf-8")
-        base.with_name(base.stem + "_sales.html").write_text(wrap("Продажи по группам клиентов", sales.html_section(srep)), encoding="utf-8")
+        base.with_name(base.stem + "_sales.html").write_text(wrap("Продажи по группам клиентов", sales.html_section(srep) + sales.yoy_html(yoy)), encoding="utf-8")
         if debts:
             base.with_name(base.stem + "_debts.html").write_text(wrap("Дебиторка", sales.debts_html(debts)), encoding="utf-8")
         print(f"Тексты писем: {base}, {base.stem}_sales.html, {base.stem}_debts.html")

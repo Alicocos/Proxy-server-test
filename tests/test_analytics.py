@@ -247,3 +247,47 @@ def test_debts(tmp_path):
     assert (d["n"], d["other_total"], d["other"][0]["name"]) == (1, 700000, "Учредитель")  # не клиент — отдельно
     out = sales.write_debts_book(d, tmp_path / "d2.xlsx")
     assert "Прочие долги" in load_workbook(out).sheetnames and "700 000" in sales.debts_html(d)
+
+
+def test_yoy_stockout_deposit_date(tmp_path):
+    from msreport import sales
+    ag = lambda i: {"agent": {"meta": {"href": f"{H}/counterparty/{i}"}}}  # noqa: E731
+    r = {"counterparties": [{"id": S1, "name": "А", "tags": ["клиенты", "сержан клиент"]}],
+         "sales_docs": {"demand": [
+             {"moment": "2026-11-05 09:00:00.000", "sum": 300000, **ag(S1)},
+             {"moment": "2025-11-03 09:00:00.000", "sum": 200000, **ag(S1)},   # те же дни прошлого года
+             {"moment": "2025-11-20 09:00:00.000", "sum": 900000, **ag(S1)},   # позже 12-го — не сравниваем
+             {"moment": "2026-10-10 09:00:00.000", "sum": 500000, **ag(S1)},
+             {"moment": "2025-10-10 09:00:00.000", "sum": 250000, **ag(S1)},
+             {"moment": "2025-01-10 09:00:00.000", "sum": 100000, **ag(S1)}]}}
+    y = sales.build_yoy(r, CFG, TODAY)
+    cur, octo = y["rows"][-1], y["rows"][-2]
+    assert cur["partial"] and cur["ИТОГО"] == (3000, 2000) and cur["Сержан клиенты"] == (3000, 2000)
+    assert octo["month"] == "2026-10" and octo["ИТОГО"] == (5000, 2500)
+    assert y["rows"][0]["month"] == "2025-11" and y["rows"][0]["has_prev"] is False  # данных за ноябрь 2024 нет
+    assert y["year"]["ИТОГО"][1] is None
+    assert "+50%" in sales.yoy_html(y) and "+100%" in sales.yoy_html(y)
+    from openpyxl import load_workbook
+    out = sales.write_sales(sales.build_sales(r, CFG, TODAY), tmp_path / "s.xlsx", y)
+    assert load_workbook(out).sheetnames[1] == "Сверка по месяцам"
+
+    # стокаут: остаток 0 при продажах, плюс почти кончившийся товар
+    rr = raw(stock=0, q30=30, q90=90)
+    rr["last_sale"] = {PID: "2026-11-02 10:00:00.000"}
+    p = a.build_products(rr, CFG)
+    so = a.build_stockout(p, rr, CFG, TODAY)
+    assert so[0]["so_status"] == "Нет в наличии" and so[0]["days_out"] == 10 and so[0]["lost_day"] == 1500
+    assert a.build_stockout(a.build_products(raw(stock=10, q30=30, q90=90), CFG), {}, CFG, TODAY)[0]["so_status"] == "Скоро кончится"
+    assert a.build_stockout(a.build_products(raw(stock=500, q30=30, q90=90), CFG), {}, CFG, TODAY) == []
+
+    # дата предоплаты: депозит 150 покрывается двумя последними платежами
+    m = raw()
+    m["counterparties"] = [{"id": S1, "name": "Завод", "tags": ["поставщики китай"]}]
+    m["balances"] = {S1: -15000}
+    pay = lambda d, s: {"meta": {"type": "paymentout"}, "moment": d, "sum": s, **ag(S1)}  # noqa: E731
+    m["payments"] = [pay("2026-11-01 00:00:00.000", 10000), pay("2026-10-01 00:00:00.000", 10000), pay("2026-08-01 00:00:00.000", 10000)]
+    m["supplies"] = []
+    s = a.build_money(m, CFG, TODAY)[0][0]
+    assert (s["dep_since"], s["dep_days"]) == (datetime(2026, 10, 1), 42)
+    m["balances"] = {S1: -99000}
+    assert a.build_money(m, CFG, TODAY)[0][0]["dep_text"] == "больше года"

@@ -266,7 +266,7 @@ def build_money(raw: dict, cfg: dict, today: datetime):
     logi = {x.lower() for x in cfg["logistics"]["expense_items"]}
     sup = {c["id"]: {"agent": c["name"], "deposit": None, "debt": None, "pay30": 0.0, "pay90": 0.0, "pay365": 0.0,
                      "sup90": 0.0, "sup365": 0.0, "payments": 0, "supplies": 0, "last_pay": None, "last_sup": None,
-                     "flag": ""}
+                     "flag": "", "pay_list": []}
            for c in raw.get("counterparties", [])
            if c["id"] not in bazaar and tags & {t.lower() for t in c.get("tags", [])}}
     months = defaultdict(lambda: {"paid": 0.0, "received": 0.0, "logistics": 0.0})
@@ -289,6 +289,7 @@ def build_money(raw: dict, cfg: dict, today: datetime):
         s["pay90"] += amount if age <= 90 else 0
         s["pay30"] += amount if age <= 30 else 0
         s["payments"] += 1
+        s["pay_list"].append((when, amount))
         s["last_pay"] = max(s["last_pay"] or when, when)
         if age <= sc["payments_days"]:
             register.append({"moment": when, "name": p.get("name", ""), "agent": s["agent"], "sum": amount,
@@ -312,6 +313,19 @@ def build_money(raw: dict, cfg: dict, today: datetime):
             bal = _money(balances.get(aid))
             s["deposit"], s["debt"] = max(0.0, -bal), max(0.0, bal)
         s["days_no_sup"] = (today - s["last_sup"]).days if s["last_sup"] else None
+        # дата предоплаты: депозит относим на самые свежие платежи (приёмки гасят старые платежи первыми)
+        s["dep_since"], s["dep_days"], s["dep_text"] = None, None, ""
+        if s["deposit"]:
+            left = s["deposit"]
+            for when, amount in sorted(s["pay_list"], reverse=True):
+                left -= amount
+                s["dep_since"] = when
+                if left <= 0.5:
+                    break
+            if left > 0.5:  # депозит больше всех платежей за год
+                s["dep_since"], s["dep_text"] = None, "больше года"
+            s["dep_days"] = (today - s["dep_since"]).days if s["dep_since"] else None
+        del s["pay_list"]
         if s["deposit"] and (s["days_no_sup"] is None or s["days_no_sup"] > sc["stale_days"]):
             s["flag"] = "Предоплата без движения"
     rows = sorted((s for s in sup.values() if s["deposit"] or s["debt"] or s["pay365"] or s["sup365"]),
@@ -353,6 +367,31 @@ def build_logistics(rows: list[dict], today: datetime) -> list[dict]:
     return out
 
 
+def build_stockout(products: list[dict], raw: dict, cfg: dict, today: datetime) -> list[dict]:
+    """Товар, который продаётся, но кончился или вот-вот кончится."""
+    lim = cfg["purchase"].get("stockout_days", 14)
+    last = raw.get("last_sale") or {}
+    out = []
+    for p in products:
+        if not p["daily"]:
+            continue
+        price = p["rev90"] / p["q90"] if p["q90"] else p.get("sale_price") or 0
+        ls = _dt(last.get(p["id"]))
+        row = {**p, "last_sale": ls, "lost_day": p["daily"] * price, "days_out": None, "lost_total": None}
+        if p["stock"] <= 0:
+            row["so_status"] = "Нет в наличии"
+            if ls:
+                row["days_out"] = max((today - ls).days, 0)
+                row["lost_total"] = row["lost_day"] * row["days_out"]
+        elif p["cover"] is not None and p["cover"] < lim:
+            row["so_status"] = "Скоро кончится"
+        else:
+            continue
+        out.append(row)
+    out.sort(key=lambda r: (r["so_status"] != "Нет в наличии", -r["lost_day"]))
+    return out
+
+
 def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: datetime) -> dict:
     ordered, etas, orders = build_orders(raw, cfg, today)
     products = build_products(raw, cfg, ordered)
@@ -376,6 +415,7 @@ def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: dateti
     baz_ids = raw.get("bazaar_ids", [])
     baz_sum = sum(p["baz_sum90"] for p in products)
     last3 = monthly[-3:]
+    stockout = build_stockout(products, raw, cfg, today)
     kpi = {
         "stock_value": stock_value,
         "sku_in_stock": sum(1 for p in products if p["stock"] > 0),
@@ -407,6 +447,11 @@ def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: dateti
         "ship_active": len(active), "ship_overdue": sum(1 for r in active if r["overdue"] > 0),
         "ship_unpaid": ", ".join(f"{v:,.0f} {c}".replace(",", " ") for c, v in unpaid.items()) or "0",
         "sales_source": raw.get("sales_source", ""),
+        "so_out": sum(1 for r in stockout if r["so_status"] == "Нет в наличии"),
+        "so_low": sum(1 for r in stockout if r["so_status"] == "Скоро кончится"),
+        "so_lost_day": sum(r["lost_day"] for r in stockout if r["so_status"] == "Нет в наличии"),
+        "so_out_transit": sum(1 for r in stockout if r["so_status"] == "Нет в наличии" and r["transit"] > 0),
+        "so_days": cfg["purchase"].get("stockout_days", 14),
         "transit_sku": sum(1 for p in products if p["transit"] > 0),
         "eta_overdue": sum(1 for p in products if p["transit"] > 0 and p["eta"] and p["eta"] < today),
         "orders_open": len(orders), "orders_left": sum(o["left_sum"] for o in orders),
@@ -414,6 +459,6 @@ def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: dateti
         "orders_noplan": sum(1 for o in orders if not o["planned"]),
         "orders_since": cfg["orders"]["since"],
     }
-    return {"today": today, "kpi": kpi, "orders": orders, "products": products, "stores": stores, "transfers": transfers,
+    return {"today": today, "kpi": kpi, "stockout": stockout, "orders": orders, "products": products, "stores": stores, "transfers": transfers,
             "suppliers": suppliers, "payments": payments, "monthly": monthly, "logistics": logistics,
             "bazaar": sorted((p for p in products if p["baz90"] > 0), key=lambda p: -p["baz_sum90"])}
