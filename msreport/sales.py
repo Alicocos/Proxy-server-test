@@ -55,7 +55,8 @@ def build_yoy(raw: dict, cfg: dict, today: datetime) -> dict:
             if ym == prev(cur) and day > today.day:
                 ym = ym + "+"
             net[(group(m.group(0)), ym)] += sign * (d.get("sum") or 0) / 100
-    has = lambda m: bool(first_doc) and first_doc[:7] <= m  # noqa: E731
+    # месяц сравниваем, только если учёт в МойСклад уже вёлся с его первого числа
+    has = lambda m: bool(first_doc) and (first_doc[:7] < m or (first_doc[:7] == m and first_doc[8:10] == "01"))  # noqa: E731
     rows = []
     for m in months:
         pm = prev(m)
@@ -70,7 +71,8 @@ def build_yoy(raw: dict, cfg: dict, today: datetime) -> dict:
     year = {g: (sum(r[g][0] for r in full), sum(r[g][1] or 0 for r in full) if all(r["has_prev"] for r in full) else None)
             for g in names + ["ИТОГО"]}
     shown = [g for g in names if g != OTHER or any(r[g][0] or (r[g][1] or 0) for r in rows)]
-    return {"today": today, "rows": rows, "groups": shown, "year": year, "first_doc": first_doc}
+    return {"today": today, "rows": rows, "groups": shown, "year": year, "first_doc": first_doc,
+            "compared": sum(1 for r in rows if r["has_prev"])}
 
 
 def _months(today: datetime) -> list[str]:
@@ -352,7 +354,8 @@ def write_yoy(wb, yoy: dict, index: int = 1) -> None:
     ws["A1"] = "Сверка по месяцам: этот год против того же месяца прошлого года"
     ws["A1"].font = Font(bold=True, size=14)
     ws["A2"] = (f"Чистые продажи (отгрузки минус возвраты), тенге. Текущий месяц сравнивается с 1–{today.day} числом "
-                "того же месяца прошлого года. «нет данных» — в МойСклад нет документов за тот период.")
+                "того же месяца прошлого года. «нет данных» — учёт в МойСклад за тот месяц ещё не вёлся или вёлся не с начала месяца"
+                + (f" (первая отгрузка в МойСклад — {yoy['first_doc'][8:10]}.{yoy['first_doc'][5:7]}.{yoy['first_doc'][:4]})." if yoy.get("first_doc") else "."))
     cols = ["ИТОГО"] + yoy["groups"]
     heads = ["Месяц"]
     for g in cols:
