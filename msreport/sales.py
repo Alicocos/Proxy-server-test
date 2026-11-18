@@ -24,6 +24,11 @@ def yoy_start(today: datetime) -> datetime:
     return datetime(today.year - 2, today.month, 1)
 
 
+def _excluded_ids(raw: dict, cfg: dict) -> set:
+    words = [w.lower() for w in cfg["sales"].get("exclude_agents", [])]
+    return {c["id"] for c in raw.get("counterparties", []) if any(w in c.get("name", "").lower() for w in words)}
+
+
 def build_yoy(raw: dict, cfg: dict, today: datetime) -> dict:
     """Сверка по месяцам: каждый из последних 13 месяцев против того же месяца годом раньше.
 
@@ -42,12 +47,13 @@ def build_yoy(raw: dict, cfg: dict, today: datetime) -> dict:
     prev = lambda m: f"{int(m[:4]) - 1}{m[4:]}"  # noqa: E731
     net = defaultdict(float)  # (группа, месяц) -> сумма
     first_doc = None
+    skip = _excluded_ids(raw, cfg)
     for kind, sign in (("demand", 1), ("retaildemand", 1), ("salesreturn", -1), ("retailsalesreturn", -1)):
         for d in raw.get("sales_docs", {}).get(kind, []):
             if d.get("applicable") is False:
                 continue
             m = UUID.search((d.get("agent") or {}).get("meta", {}).get("href", ""))
-            if not m:
+            if not m or m.group(0) in skip:
                 continue
             first_doc = min(first_doc or d["moment"], d["moment"])
             ym, day = d["moment"][:7], int(d["moment"][8:10])
@@ -106,6 +112,7 @@ def build_sales(raw: dict, cfg: dict, today: datetime) -> dict:
     cl = defaultdict(lambda: {"ship": z(), "ret": z(), "n": z(), "last": None})
     per = {g: {k: {"net": 0.0, "n": 0, "clients": set()} for k in periods} for g in names}
     docs = raw.get("sales_docs", {})
+    skip = _excluded_ids(raw, cfg)
     for kind, sign in (("demand", 1), ("retaildemand", 1), ("salesreturn", -1), ("retailsalesreturn", -1)):
         for d in docs.get(kind, []):
             if d.get("applicable") is False:
@@ -113,7 +120,7 @@ def build_sales(raw: dict, cfg: dict, today: datetime) -> dict:
             m = UUID.search((d.get("agent") or {}).get("meta", {}).get("href", ""))
             when = datetime.strptime(d["moment"][:19], "%Y-%m-%d %H:%M:%S")
             ym = d["moment"][:7]
-            if not m or ym not in months:
+            if not m or ym not in months or m.group(0) in skip:
                 continue
             aid, v = m.group(0), (d.get("sum") or 0) / 100
             c = cl[aid]
@@ -183,7 +190,10 @@ def build_debts(raw: dict, cfg: dict, today: datetime) -> dict | None:
         if d.get("applicable") is not False and aid(d):
             pays[aid(d)].append((when(d), (d.get("sum") or 0) / 100))
     rows = []
+    skip = _excluded_ids(raw, cfg)
     for c in raw.get("counterparties", []):
+        if c["id"] in skip:
+            continue
         debt = -(balances.get(c["id"]) or 0) / 100
         tags = {t.lower() for t in c.get("tags", [])}
         if debt < 1 or tags & sup_tags:
@@ -530,7 +540,7 @@ def write_sales(rep: dict, path: Path, yoy: dict | None = None) -> Path:
         ("Сверка по месяцам", "Каждый месяц против того же месяца прошлого года, по группам и итого. Текущий месяц — против тех же дней прошлого года. Внизу — 12 полных месяцев против предыдущих 12."),
         ("Чистые продажи", "Сумма отгрузок минус сумма возвратов покупателей, по ценам отгрузки. Возврат вычитается в день оформления."),
         ("Группы", "По группам (тегам) контрагента в МойСклад, список — в config.toml, раздел [sales]. «Прочие» — покупатели без этих тегов."),
-        ("Строи сити", "Отгрузка на базар считается продажей, хотя товар может ещё лежать в ангарах."),
+        ("Строи сити", "В этот отчёт не входит: по Строи сити — отдельный отчёт из его собственного аккаунта МойСклад."),
         ("Сегодня / Вчера / 7 дней", "По дате документа в МойСклад. Если отгрузки вносят с опозданием, свежие дни будут занижены."),
         ("Месяц с начала", "С 1-го числа текущего месяца по сегодня."),
         ("Прошлый месяц за те же дни", "С 1-го числа прошлого месяца по то же число — честное сравнение с неполным текущим месяцем."),

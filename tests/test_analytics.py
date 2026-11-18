@@ -212,7 +212,7 @@ def test_sales_by_groups(tmp_path):
     wb = load_workbook(out)
     assert {"Сводка", "Отгрузки", "Возвраты", "Сержан клиенты", "Общие клиенты", "Как читать"} <= set(wb.sheetnames)
     full = sales.build_sales(demo.demo_raw(TODAY), CFG, TODAY)
-    assert full["total"] > 0 and len(full["groups"]) == 5
+    assert full["total"] > 0 and len(full["groups"]) == 4 and "Строи сити (базар)" not in full["groups"]
 
 
 def test_debts(tmp_path):

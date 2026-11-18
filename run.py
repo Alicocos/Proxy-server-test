@@ -37,6 +37,7 @@ def run_account(args, cfg: dict, today: datetime) -> int:
     acc = cfg["accounts"][args.account]
     acfg = copy.deepcopy(cfg)
     acfg["sales"]["groups"] = acc["groups"]
+    acfg["sales"]["exclude_agents"] = acc.get("exclude_agents", [])
     title, tag = acc["title"], acc["title"].replace(" ", "_")
     if args.raw:
         import pickle
