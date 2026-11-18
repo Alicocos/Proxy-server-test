@@ -1,0 +1,25 @@
+<title>Отчёты Строи сити</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Служебная страница: передача файлов отчётов между заданиями. Одна колонка. */
+:root { --bg:#f6f7f5; --fg:#1d2420; --muted:#5d6b63; --line:#d9dfdb; --accent:#2f6b4f;
+  --body:"Inter",system-ui,sans-serif; --head:"Space Grotesk","Inter",system-ui,sans-serif; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#141917; --fg:#e7ece9; --muted:#9aa8a0; --line:#2b3430; --accent:#7cc4a0; color-scheme:dark } }
+:root[data-theme="dark"] { --bg:#141917; --fg:#e7ece9; --muted:#9aa8a0; --line:#2b3430; --accent:#7cc4a0; color-scheme:dark }
+body { background:var(--bg); color:var(--fg); font-family:var(--body); padding-left:max(16px, env(safe-area-inset-left, 0px)); padding-right:max(16px, env(safe-area-inset-right, 0px)); padding-block:32px }
+main { max-width:640px; margin:0 auto; display:grid; gap:16px }
+h1 { font-family:var(--head); font-size:1.6rem; margin:0; text-wrap:balance }
+p { margin:0; line-height:1.55; color:var(--muted) }
+ul { margin:0; padding-left:1.2em; display:grid; gap:6px }
+code { font-size:.9em; color:var(--accent) }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Space+Grotesk:wght@600&display=swap">
+<main>
+  <h1>Отчёты Строи сити</h1>
+  <p>Служебная страница. Задание в окружении «stroycity-reports» дважды в день выкладывает сюда свежие отчёты второго аккаунта МойСклад, а плановый запуск в основном чате забирает их и рассылает на почту.</p>
+  <ul>
+    <li><code>sales.xlsx.b64.txt</code> — продажи по клиентам (Excel в base64)</li>
+    <li><code>debts.xlsx.b64.txt</code> — дебиторка (Excel в base64)</li>
+    <li><code>meta.json</code> — время сборки</li>
+  </ul>
+</main>
