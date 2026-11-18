@@ -13,7 +13,8 @@ class ApiError(RuntimeError):
 
 
 class MoySklad:
-    def __init__(self, token: str):
+    def __init__(self, token: str, base: str = BASE):
+        self.base = base.rstrip("/")
         self.s = requests.Session()
         self.s.headers.update({
             "Authorization": f"Bearer {token}",
@@ -22,7 +23,7 @@ class MoySklad:
         })
 
     def get(self, path: str, params: dict | None = None) -> dict:
-        url = path if path.startswith("http") else f"{BASE}/{path.lstrip('/')}"
+        url = path if path.startswith("http") else f"{self.base}/{path.lstrip('/')}"
         for attempt in range(6):
             try:
                 r = self.s.get(url, params=params, timeout=120)

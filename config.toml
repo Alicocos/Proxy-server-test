@@ -45,3 +45,9 @@ groups = [
 timezone = "Asia/Almaty"            # время отчёта и «сегодня» для расчётов просрочек
 logistics = "input/logistics.xlsx"   # ручной ввод логистики (создаётся автоматически)
 reports_dir = "reports"
+
+[accounts.stroycity]
+# Второй аккаунт МойСклад. Ключ берётся из прокси окружения, в котором запущен отчёт (см. README).
+title = "Строи сити"
+base_url = "https://api.moysklad.ru/api/remap/1.2"
+groups = [ { name = "Клиенты", tag = "клиенты" } ]

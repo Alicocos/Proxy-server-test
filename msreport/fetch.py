@@ -141,3 +141,26 @@ def fetch_all(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
         "bazaar30": baz30, "bazaar90": baz90, "bazaar_in90": bazaar_in, "bazaar_ids": sorted(bazaar_ids),
         "sales_source": source, "supplies": supplies, "payments": payments,
     }
+
+
+def fetch_sales_only(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
+    """Только то, что нужно для отчётов «Продажи по клиентам» и «Дебиторка» (для второго аккаунта)."""
+    from .sales import first_month, yoy_start
+    log("Контрагенты и балансы…")
+    counterparties = [{"id": c["id"], "name": c.get("name", ""), "tags": c.get("tags", []), "meta": c["meta"]}
+                      for c in ms.rows("entity/counterparty")]
+    try:
+        balances = {_id(r.get("counterparty")): r.get("balance") or 0 for r in ms.rows("report/counterparty")}
+    except ApiError as e:
+        if e.status != 403:
+            raise
+        log("  нет прав на отчёт по контрагентам — дебиторки не будет")
+        balances = None
+    log("Продажи за два года…")
+    s0, s2 = first_month(today).strftime(FMT), yoy_start(today).strftime(FMT)
+    pick = lambda d: {"moment": d["moment"], "sum": d.get("sum") or 0,  # noqa: E731
+                      "agent": {"meta": {"href": d["agent"]["meta"]["href"]}}, "applicable": d.get("applicable")}
+    sales_docs = {k: [pick(d) for d in ms.rows(f"entity/{k}", {"filter": f"moment>={s2}"})]
+                  for k in ("demand", "salesreturn", "retaildemand", "retailsalesreturn")}
+    pay_in = [pick(d) for k in ("paymentin", "cashin") for d in ms.rows(f"entity/{k}", {"filter": f"moment>={s0}"})]
+    return {"counterparties": counterparties, "balances": balances, "sales_docs": sales_docs, "pay_in": pay_in}
