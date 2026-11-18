@@ -184,6 +184,8 @@ def fetch_sales_only(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dic
             log(f"  нет прав на {kind} — пропускаю")
             return []
 
+    if not cfg.get("_yoy", True):
+        s2 = s0
     sales_docs = {k: docs(k, s2) for k in ("demand", "salesreturn", "retaildemand", "retailsalesreturn")}
     pay_in = [d for k in ("paymentin", "cashin") for d in docs(k, s0)]
     return {"counterparties": counterparties, "balances": balances, "sales_docs": sales_docs, "pay_in": pay_in,

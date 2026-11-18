@@ -38,6 +38,7 @@ def run_account(args, cfg: dict, today: datetime) -> int:
     acfg = copy.deepcopy(cfg)
     acfg["sales"]["groups"] = acc["groups"]
     acfg["sales"]["exclude_agents"] = acc.get("exclude_agents", [])
+    acfg["_yoy"] = acc.get("yoy", True)
     title, tag = acc["title"], acc["title"].replace(" ", "_")
     if args.raw:
         import pickle
@@ -58,7 +59,8 @@ def run_account(args, cfg: dict, today: datetime) -> int:
             Path(args.save_raw).write_bytes(pickle.dumps({"raw": raw, "today": today}))
     stamp = f"{today:%Y-%m-%d_%H%M}"
     folder = ROOT / cfg["files"]["reports_dir"]
-    srep, yoy = sales.build_sales(raw, acfg, today), sales.build_yoy(raw, acfg, today)
+    srep = sales.build_sales(raw, acfg, today)
+    yoy = sales.build_yoy(raw, acfg, today) if acfg["_yoy"] else None
     sout = sales.write_sales(srep, folder / f"Продажи_по_клиентам_{tag}_{stamp}.xlsx", yoy)
     print(f"Продажи ({title}): {sout}")
     if raw.get("forbidden"):
@@ -71,7 +73,7 @@ def run_account(args, cfg: dict, today: datetime) -> int:
         wrap = lambda t, body: (f'<div style="font-family:Arial,sans-serif;font-size:14px"><p>{t} — {title}, на '  # noqa: E731
                                 f'{today:%d.%m.%Y %H:%M} (Алматы). Полный отчёт — в файле Excel во вложении.</p>{body}</div>')
         base = Path(args.html)
-        base.with_name(base.stem + "_sales.html").write_text(wrap("Продажи по клиентам", sales.html_section(srep) + sales.yoy_html(yoy)), encoding="utf-8")
+        base.with_name(base.stem + "_sales.html").write_text(wrap("Продажи по клиентам", sales.html_section(srep) + (sales.yoy_html(yoy) if yoy else "")), encoding="utf-8")
         if debts:
             base.with_name(base.stem + "_debts.html").write_text(wrap("Дебиторка", sales.debts_html(debts)), encoding="utf-8")
     return 0
