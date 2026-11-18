@@ -43,17 +43,27 @@ class MoySklad:
             return r.json()
         raise ApiError(f"МойСклад не отвечает на {path} после нескольких попыток")
 
-    def rows(self, path: str, params: dict | None = None, limit: int = 1000) -> list[dict]:
-        """Все строки с постраничной выгрузкой. При expand лимит МойСклад — 100."""
+    def rows(self, path: str, params: dict | None = None, limit: int = 1000, workers: int = 5) -> list[dict]:
+        """Все строки с постраничной выгрузкой: первая страница даёт общее число, остальные качаются параллельно
+        (МойСклад разрешает до 5 одновременных запросов). При expand лимит страницы — 100."""
+        from concurrent.futures import ThreadPoolExecutor
         params = dict(params or {})
         if "expand" in params:
             limit = min(limit, 100)
-        out, offset = [], 0
-        while True:
-            page = self.get(path, {**params, "limit": limit, "offset": offset})
-            chunk = page.get("rows", [])
-            out.extend(chunk)
-            offset += limit
-            size = page.get("meta", {}).get("size")
-            if len(chunk) < limit or (size is not None and offset >= size):
-                return out
+        first = self.get(path, {**params, "limit": limit, "offset": 0})
+        out = list(first.get("rows", []))
+        size = first.get("meta", {}).get("size")
+        if size is None:  # отчёты без общего числа строк — по очереди
+            offset = limit
+            chunk = out
+            while len(chunk) == limit:
+                chunk = self.get(path, {**params, "limit": limit, "offset": offset}).get("rows", [])
+                out.extend(chunk)
+                offset += limit
+            return out
+        offsets = list(range(limit, size, limit))
+        if offsets:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                for page in pool.map(lambda o: self.get(path, {**params, "limit": limit, "offset": o}), offsets):
+                    out.extend(page.get("rows", []))
+        return out
