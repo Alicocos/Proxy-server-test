@@ -160,7 +160,7 @@ def fetch_sales_only(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dic
     from .sales import first_month, yoy_start
     log("Контрагенты и балансы…")
     counterparties = [{"id": c["id"], "name": c.get("name", ""), "tags": c.get("tags", []), "meta": c["meta"]}
-                      for c in ms.rows("entity/counterparty")]
+                      for c in ms.rows("entity/counterparty", {"filter": "archived=true;archived=false"})]
     try:
         balances = {_id(r.get("counterparty")): r.get("balance") or 0 for r in ms.rows("report/counterparty")}
     except ApiError as e:
