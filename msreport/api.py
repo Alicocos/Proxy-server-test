@@ -24,17 +24,17 @@ class MoySklad:
 
     def get(self, path: str, params: dict | None = None) -> dict:
         url = path if path.startswith("http") else f"{self.base}/{path.lstrip('/')}"
-        for attempt in range(6):
+        for attempt in range(10):
             try:
                 r = self.s.get(url, params=params, timeout=120)
             except requests.RequestException as e:
-                if attempt == 5:
+                if attempt == 9:
                     raise ApiError(f"Нет связи с МойСклад: {e}") from e
                 time.sleep(2 ** attempt)
                 continue
             if r.status_code == 429 or r.status_code >= 500:
                 wait_ms = r.headers.get("X-Lognex-Retry-After") or r.headers.get("X-Lognex-Retry-TimeInterval")
-                time.sleep(max(float(wait_ms) / 1000 if wait_ms else 0, 1.5 * (attempt + 1)))
+                time.sleep(max(float(wait_ms) / 1000 if wait_ms else 0, min(3 * (attempt + 1), 20)))
                 continue
             if r.status_code == 401:
                 raise ApiError("МойСклад отклонил токен (401). Проверьте MOYSKLAD_TOKEN.")
@@ -43,7 +43,7 @@ class MoySklad:
             return r.json()
         raise ApiError(f"МойСклад не отвечает на {path} после нескольких попыток")
 
-    def rows(self, path: str, params: dict | None = None, limit: int = 1000, workers: int = 5) -> list[dict]:
+    def rows(self, path: str, params: dict | None = None, limit: int = 1000, workers: int = 4) -> list[dict]:
         """Все строки с постраничной выгрузкой: первая страница даёт общее число, остальные качаются параллельно
         (МойСклад разрешает до 5 одновременных запросов). При expand лимит страницы — 100."""
         from concurrent.futures import ThreadPoolExecutor

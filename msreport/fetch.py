@@ -128,7 +128,7 @@ def fetch_all(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
     s0 = first_month(today).strftime(FMT)
     s2 = yoy_start(today).strftime(FMT)
     sales_docs = {k: [{"moment": d["moment"], "sum": d.get("sum") or 0, "agent": {"meta": {"href": d["agent"]["meta"]["href"]}},
-                       "applicable": d.get("applicable")} for d in ms.rows(f"entity/{k}", {"filter": f"moment>={s2}"})]
+                       "applicable": d.get("applicable")} for d in rows_by_month(ms, k, yoy_start(today), today)]
                   for k in ("demand", "salesreturn", "retaildemand", "retailsalesreturn")}
 
     pay_in = [{"moment": d["moment"], "sum": d.get("sum") or 0, "agent": {"meta": {"href": d["agent"]["meta"]["href"]}},
@@ -141,6 +141,18 @@ def fetch_all(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
         "bazaar30": baz30, "bazaar90": baz90, "bazaar_in90": bazaar_in, "bazaar_ids": sorted(bazaar_ids),
         "sales_source": source, "supplies": supplies, "payments": payments,
     }
+
+
+def rows_by_month(ms: MoySklad, kind: str, since: datetime, until: datetime, params: dict | None = None) -> list[dict]:
+    """Документы помесячно: короткие запросы без глубокого листания, на больших аккаунтах это в разы надёжнее."""
+    out, a = [], datetime(since.year, since.month, 1)
+    while a <= until:
+        b = datetime(a.year + (a.month == 12), a.month % 12 + 1, 1)
+        lo = max(a, since)
+        out += ms.rows(f"entity/{kind}", {**(params or {}),
+                                          "filter": f"moment>={lo.strftime(FMT)};moment<{b.strftime(FMT)}"})
+        a = b
+    return out
 
 
 def fetch_sales_only(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dict:
@@ -164,7 +176,7 @@ def fetch_sales_only(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dic
 
     def docs(kind, since):
         try:
-            return [pick(d) for d in ms.rows(f"entity/{kind}", {"filter": f"moment>={since}"})]
+            return [pick(d) for d in rows_by_month(ms, kind, datetime.strptime(since, FMT), today)]
         except ApiError as e:
             if e.status != 403:
                 raise
