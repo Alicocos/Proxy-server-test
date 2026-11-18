@@ -61,6 +61,8 @@ def run_account(args, cfg: dict, today: datetime) -> int:
     srep, yoy = sales.build_sales(raw, acfg, today), sales.build_yoy(raw, acfg, today)
     sout = sales.write_sales(srep, folder / f"Продажи_по_клиентам_{tag}_{stamp}.xlsx", yoy)
     print(f"Продажи ({title}): {sout}")
+    if raw.get("forbidden"):
+        print(f"Нет прав в МойСклад на: {', '.join(raw['forbidden'])} — эти документы в отчёт не вошли")
     debts = sales.build_debts(raw, acfg, today)
     if debts:
         dout = sales.write_debts_book(debts, folder / f"Дебиторка_{tag}_{stamp}.xlsx")

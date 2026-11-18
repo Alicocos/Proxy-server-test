@@ -160,7 +160,19 @@ def fetch_sales_only(ms: MoySklad, cfg: dict, today: datetime, log=print) -> dic
     s0, s2 = first_month(today).strftime(FMT), yoy_start(today).strftime(FMT)
     pick = lambda d: {"moment": d["moment"], "sum": d.get("sum") or 0,  # noqa: E731
                       "agent": {"meta": {"href": d["agent"]["meta"]["href"]}}, "applicable": d.get("applicable")}
-    sales_docs = {k: [pick(d) for d in ms.rows(f"entity/{k}", {"filter": f"moment>={s2}"})]
-                  for k in ("demand", "salesreturn", "retaildemand", "retailsalesreturn")}
-    pay_in = [pick(d) for k in ("paymentin", "cashin") for d in ms.rows(f"entity/{k}", {"filter": f"moment>={s0}"})]
-    return {"counterparties": counterparties, "balances": balances, "sales_docs": sales_docs, "pay_in": pay_in}
+    forbidden = []
+
+    def docs(kind, since):
+        try:
+            return [pick(d) for d in ms.rows(f"entity/{kind}", {"filter": f"moment>={since}"})]
+        except ApiError as e:
+            if e.status != 403:
+                raise
+            forbidden.append(kind)
+            log(f"  нет прав на {kind} — пропускаю")
+            return []
+
+    sales_docs = {k: docs(k, s2) for k in ("demand", "salesreturn", "retaildemand", "retailsalesreturn")}
+    pay_in = [d for k in ("paymentin", "cashin") for d in docs(k, s0)]
+    return {"counterparties": counterparties, "balances": balances, "sales_docs": sales_docs, "pay_in": pay_in,
+            "forbidden": forbidden}
