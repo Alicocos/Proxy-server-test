@@ -54,6 +54,11 @@ def summary_html(rep: dict, sales: dict | None = None, debts: dict | None = None
                 _fmt(p["lost_day"]), _fmt(p["transit"]) if p["transit"] else "—"]
                for p in [r for r in rep.get("stockout", []) if r["so_status"] == "Нет в наличии"][:15]]),
         f"<p>Ещё {k['so_low']} позиций кончатся меньше чем через {k['so_days']} дней — лист «Стокаут» в файле.</p>",
+        "<h3>Товар в пути по этапам</h3>",
+        table(["Этап", "Заказов", "Штук", "Сумма по цене заказа"],
+              [[st["stage"], st["orders"], _fmt(st["qty"]), _fmt(st["sum"])] for st in rep.get("stages", [])]),
+        "<p style='color:#777;font-size:12px'>Этап — статус заказа поставщику в МойСклад. По каждому товару этапы и сколько дозаказать — "
+        "лист «Контрольная закупка» в файле.</p>",
         "<h3>Срочно заказать — топ-15 по сумме</h3>",
         table(["Товар", "Остаток", "Хватит, дней", "Заказать, шт", "Сумма"],
               [[p["name"], _fmt(p["stock"]), _fmt(p["cover_transit"]), _fmt(p["rec"]), _fmt(p["rec_value"])] for p in urgent]),

@@ -342,3 +342,25 @@ def test_gd_sheet(tmp_path):
     assert wb.sheetnames[1] == "Продажи по менеджерам"
     vals = [c.value for row in wb["Продажи по менеджерам"].iter_rows() for c in row]
     assert "ДАНИЯР" in vals and "Total General" in vals and 3000 in vals and "НУРЛАН КАЛИ" in vals
+
+
+def test_stages_control_purchase(tmp_path):
+    r = raw(stock=20, q30=30, q90=90)
+    pos = lambda q, sh: {"assortment": {"meta": {"href": f"{H}/product/{PID}"}}, "quantity": q, "shipped": sh,  # noqa: E731
+                         "price": 1000, "discount": 0}
+    r.update(counterparties=[], supplies=[], orders=[
+        {"name": "1", "moment": "2026-11-01 00:00:00.000", "state": {"name": "Готовится"}, "positions_rows": [pos(30, 0)]},
+        {"name": "2", "moment": "2026-11-02 00:00:00.000", "state": {"name": "в пути"}, "positions_rows": [pos(50, 10)]},
+        {"name": "3", "moment": "2026-11-03 00:00:00.000", "state": {"name": "что-то новое"}, "positions_rows": [pos(5, 0)]},
+        {"name": "4", "moment": "2026-11-03 00:00:00.000", "positions_rows": [pos(7, 0)]}])
+    rep = a.build_report(r, [], CFG, TODAY)
+    st = {s["stage"]: s for s in rep["stages"]}
+    assert (st["Готовится"]["qty"], st["В пути до границы"]["qty"], st["Без этапа"]["qty"], st["Без этапа"]["orders"]) == (30, 40, 12, 2)
+    assert st["На границе"]["orders"] == 0  # этапы из настроек показываются даже пустыми
+    p = rep["control"][0]
+    assert (p["stg:Готовится"], p["stg:В пути до границы"], p["transit"]) == (30, 40, 82)
+    from openpyxl import load_workbook
+    wb = load_workbook(excel.write_report(rep, tmp_path / "r.xlsx"))
+    assert wb.sheetnames[1] == "Контрольная закупка"
+    head = [c.value for c in wb["Контрольная закупка"][1]]
+    assert "На границе" in head and "Дозаказать, шт" in head

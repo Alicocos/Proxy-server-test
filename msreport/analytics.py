@@ -103,6 +103,42 @@ def build_orders(raw: dict, cfg: dict, today: datetime):
     return transit, etas, rows
 
 
+NO_STAGE = "Без этапа"
+
+
+def stage_names(cfg: dict) -> list[str]:
+    return [s["name"] for s in cfg["orders"].get("stages", [])] + [NO_STAGE]
+
+
+def build_stages(raw: dict, cfg: dict):
+    """Товар в пути по этапам (статус заказа поставщику): по товарам и итогом по этапам."""
+    closed = {x.lower() for x in cfg["orders"].get("closed_states", [])}
+    stages = cfg["orders"].get("stages", [])
+
+    def stage_of(state):
+        st = (state or "").lower().strip()
+        return next((s["name"] for s in stages if st in {x.lower() for x in s["states"]}), NO_STAGE)
+
+    by_pid = defaultdict(lambda: defaultdict(float))
+    total = {n: {"orders": set(), "qty": 0.0, "sum": 0.0} for n in stage_names(cfg)}
+    for o in raw.get("orders", []):
+        state = ((o.get("state") or {}).get("name") or "")
+        if o.get("applicable") is False or state.lower() in closed:
+            continue
+        stg, rate = stage_of(state), (o.get("rate") or {}).get("value") or 1
+        for p in o.get("positions_rows", []):
+            pid = _id(p.get("assortment"))
+            left = max(0.0, (p.get("quantity") or 0) - (p.get("shipped") or 0))
+            if not pid or not left:
+                continue
+            by_pid[pid][stg] += left
+            total[stg]["orders"].add(o.get("name"))
+            total[stg]["qty"] += left
+            total[stg]["sum"] += left * _money(p.get("price")) * (1 - (p.get("discount") or 0) / 100) * rate
+    summary = [{"stage": n, "orders": len(v["orders"]), "qty": v["qty"], "sum": v["sum"]} for n, v in total.items()]
+    return by_pid, [s for s in summary if s["orders"] or s["stage"] != NO_STAGE]
+
+
 def build_products(raw: dict, cfg: dict, ordered: dict | None = None) -> list[dict]:
     p = cfg["purchase"]
     lead, target = p["lead_time_days"], p["lead_time_days"] + p["safety_days"] + p["order_cycle_days"]
@@ -395,8 +431,13 @@ def build_stockout(products: list[dict], raw: dict, cfg: dict, today: datetime) 
 def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: datetime) -> dict:
     ordered, etas, orders = build_orders(raw, cfg, today)
     products = build_products(raw, cfg, ordered)
+    by_stage, stage_summary = build_stages(raw, cfg)
     for p in products:
         p["eta"] = etas.get(p["id"]) if p["transit"] else None
+        for n in stage_names(cfg):
+            p["stg:" + n] = by_stage.get(p["id"], {}).get(n) or None
+    control = [p for p in products if p["transit"] > 0 or p["status"] in (URGENT, ORDER)]
+    control.sort(key=lambda p: (p["status"] != URGENT, p["transit"] == 0, -(p["rec_value"] or 0)))
     stores, transfers = build_stores(raw, products, cfg)
     suppliers, payments, monthly = build_money(raw, cfg, today)
     logistics = build_logistics(logistics_rows, today)
@@ -459,6 +500,7 @@ def build_report(raw: dict, logistics_rows: list[dict], cfg: dict, today: dateti
         "orders_noplan": sum(1 for o in orders if not o["planned"]),
         "orders_since": cfg["orders"]["since"],
     }
-    return {"today": today, "kpi": kpi, "stockout": stockout, "orders": orders, "products": products, "stores": stores, "transfers": transfers,
+    return {"today": today, "kpi": kpi, "stages": stage_summary, "stage_names": stage_names(cfg), "control": control,
+            "stockout": stockout, "orders": orders, "products": products, "stores": stores, "transfers": transfers,
             "suppliers": suppliers, "payments": payments, "monthly": monthly, "logistics": logistics,
             "bazaar": sorted((p for p in products if p["baz90"] > 0), key=lambda p: -p["baz_sum90"])}

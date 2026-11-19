@@ -90,6 +90,8 @@ def _summary(ws, rep):
             ("  из них с прошедшей плановой датой", k["orders_overdue"], MONEY, ""),
             ("  из них без плановой даты", k["orders_noplan"], MONEY, "заполните «План. дата приёмки» в заказе"),
         ]),
+        ("Товар в пути по этапам", [(f"{st['stage']}: заказов {st['orders']}", st["sum"], MONEY,
+                                     f"{st['qty']:,.0f} шт., по цене заказа".replace(",", " ")) for st in rep["stages"]]),
         ("Деньги у заводов", [
             ("Депозиты у заводов (предоплата без товара)", k["deposits"], MONEY, "по балансу взаиморасчётов: оплачено больше, чем принято"),
             ("  из них без движения", k["stale"], MONEY, f"{k['stale_n']} заводов: предоплата есть, приёмок давно нет"),
@@ -140,7 +142,16 @@ def write_report(rep: dict, path: Path) -> Path:
     table(wb.create_sheet("Закуп"), PROD_COLS, rep["products"])
     wb["Закуп"].freeze_panes = "D2"
 
-    so = wb.create_sheet("Стокаут", 1)
+    names = [s["stage"] for s in rep["stages"]]
+    cz = wb.create_sheet("Контрольная закупка", 1)
+    table(cz, [("Статус закупа", "status", 16, None), ("Товар", "name", 40, None), ("Код", "code", 10, None),
+               ("Остаток", "stock", 10, QTY), ("Продаж в день", "daily", 9, "0.00"), ("Хватит, дней", "cover", 9, DAYS)]
+          + [(n, "stg:" + n, 12, QTY) for n in names]
+          + [("В пути всего", "transit", 11, QTY), ("Хватит с учётом пути, дней", "cover_transit", 11, DAYS),
+             ("Ближайший приход", "eta", 12, DATE), ("Дозаказать, шт", "rec", 11, QTY), ("Дозаказать, сумма", "rec_value", 14, MONEY)],
+          rep["control"])
+    cz.freeze_panes = "C2"
+    so = wb.create_sheet("Стокаут", 2)
     table(so, [
         ("Статус", "so_status", 16, None), ("ABC", "abc", 6, None), ("Товар", "name", 40, None),
         ("Код", "code", 10, None), ("Группа", "folder", 20, None), ("Остаток", "stock", 9, QTY),
