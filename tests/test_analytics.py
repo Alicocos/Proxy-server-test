@@ -307,7 +307,7 @@ def test_daily_by_rep(tmp_path):
                         "salesreturn": [{"moment": "2026-11-12 11:00:00.000", "sum": 20000, **ag(S1)}]}}
     rep = sales.build_sales(r, CFG, TODAY)
     from datetime import date
-    assert rep["reps"] == ["Алдияр", "Сержан", "Данияр", "Фараби", "Остальные"] and len(rep["days"]) == 12
+    assert rep["reps"] == ["Сержан", "Фараби", "Остальные"] and len(rep["days"]) == 12  # без продаж в месяце не показываются
     assert rep["daily"][date(2026, 11, 10)]["Сержан"] == 1000 and rep["daily"][date(2026, 11, 10)]["Фараби"] == 500
     assert rep["daily"][date(2026, 11, 12)]["Сержан"] == -200 and rep["daily"][date(2026, 11, 12)]["Остальные"] == 700
     html = sales.html_section(rep)
@@ -316,3 +316,29 @@ def test_daily_by_rep(tmp_path):
     ws = load_workbook(sales.write_sales(rep, tmp_path / "s.xlsx"))["Сводка"]
     texts = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, str)]
     assert any("Продажи по дням" in x for x in texts) and "10.11 вт" in texts
+
+
+def test_gd_sheet(tmp_path):
+    from msreport import gd, sales
+    ag = lambda i: {"agent": {"meta": {"href": f"{H}/counterparty/{i}"}}}  # noqa: E731
+    r = {"counterparties": [{"id": S1, "name": "Клиент", "tags": ["клиенты", "данияр клиент"]},
+                            {"id": S2, "name": "Сотрудник", "tags": ["сотрудники"]}],
+         "balances": {S1: -500000, S2: -900000},
+         "sales_docs": {"demand": [{"moment": "2026-11-12 09:00:00.000", "sum": 100000, **ag(S1)},
+                                   {"moment": "2026-11-03 09:00:00.000", "sum": 200000, **ag(S1)},
+                                   {"moment": "2026-11-03 09:00:00.000", "sum": 999, **ag(S2)}],
+                        "salesreturn": [{"moment": "2026-11-12 10:00:00.000", "sum": 30000, **ag(S1)}]},
+         "pay_in": [{"moment": "2026-11-12 11:00:00.000", "sum": 40000, **ag(S1)},
+                    {"moment": "2026-11-02 11:00:00.000", "sum": 60000, **ag(S1)}]}
+    sc = {"counterparties": [{"id": S1, "name": "К", "tags": ["клиент"]}], "balances": {S1: -70000},
+          "sales_docs": {"demand": [{"moment": "2026-11-12 09:00:00.000", "sum": 50000, **ag(S1)}]}, "pay_in": []}
+    g = gd.build(r, CFG, TODAY, sc)
+    d = g["base"]["Данияр"]
+    assert (d["sale_d"], d["sale_m"], d["ret_d"], d["cash_d"], d["cash_m"], d["debt"]) == (1000, 3000, 300, 400, 1000, 5000)
+    assert g["sc"]["sale_m"] == 500 and g["sc"]["debt"] == 700
+    out = sales.write_sales(sales.build_sales(r, CFG, TODAY), tmp_path / "s.xlsx", None, g)
+    from openpyxl import load_workbook
+    wb = load_workbook(out)
+    assert wb.sheetnames[1] == "Продажи по менеджерам"
+    vals = [c.value for row in wb["Продажи по менеджерам"].iter_rows() for c in row]
+    assert "ДАНИЯР" in vals and "Total General" in vals and 3000 in vals and "НУРЛАН КАЛИ" in vals

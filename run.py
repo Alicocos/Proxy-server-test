@@ -86,6 +86,7 @@ def main() -> int:
     ap.add_argument("--demo", action="store_true", help="выдуманные данные вместо МойСклад")
     ap.add_argument("--out", help="путь к файлу отчёта")
     ap.add_argument("--save-raw", help="сохранить выгрузку из МойСклад в файл (для отладки без повторной выгрузки)")
+    ap.add_argument("--sc-raw", help="выгрузка Строи сити (файл --save-raw второго аккаунта) для блока «Строй Сити» в листе по менеджерам")
     ap.add_argument("--raw", help="взять выгрузку из файла, сохранённого --save-raw, вместо обращения к МойСклад")
     ap.add_argument("--html", help="сохранить текст письма (HTML) в этот файл")
     ap.add_argument("--email", help="отправить отчёт на эти адреса (через запятую); можно задать MAIL_TO")
@@ -131,7 +132,13 @@ def main() -> int:
         sout = out.with_name("Продажи_" + out.name)
     debts = sales.build_debts(raw, cfg, today)
     yoy = sales.build_yoy(raw, cfg, today)
-    sales.write_sales(srep, sout, yoy)
+    from msreport import gd as gdmod
+    sc_raw = None
+    if args.sc_raw and Path(args.sc_raw).exists():
+        import pickle
+        sc_raw = pickle.loads(Path(args.sc_raw).read_bytes())["raw"]
+    gdrep = gdmod.build(raw, cfg, today, sc_raw)
+    sales.write_sales(srep, sout, yoy, gdrep)
     dout = None
     if debts:
         dout = sout.with_name(sout.name.replace("Продажи_по_клиентам", "Дебиторка"))

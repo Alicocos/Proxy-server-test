@@ -187,7 +187,7 @@ def build_sales(raw: dict, cfg: dict, today: datetime) -> dict:
             "silent": [c["name"] for c in mem[:10] if c["last"] and (today - c["last"]).days > 45],
         }
     shown = [g for g in names if g != OTHER or G[g]["clients"]]
-    rep_shown = [r for r in rep_names if r != "Остальные" or any(daily[d]["Остальные"] for d in days)]
+    rep_shown = [r for r in rep_names if any(daily[d][r] for d in days)]
     return {"daily": daily, "daily_n": daily_n, "days": days, "reps": rep_shown if reps else [],
             "today": today, "months": months, "full": full, "cur": cur, "groups": shown, "G": G, "clients": clients,
             "total": sum(G[g]["total"] for g in names), "period_keys": list(periods)}
@@ -530,7 +530,7 @@ def _daily_block(ws, rep: dict, top: int) -> int:
     return r
 
 
-def write_sales(rep: dict, path: Path, yoy: dict | None = None) -> Path:
+def write_sales(rep: dict, path: Path, yoy: dict | None = None, gd: dict | None = None) -> Path:
     G, groups, today = rep["G"], rep["groups"], rep["today"]
     wb = Workbook()
     ws = wb.active
@@ -603,6 +603,9 @@ def write_sales(rep: dict, path: Path, yoy: dict | None = None) -> Path:
 
     if yoy:
         write_yoy(wb, yoy)
+    if gd:
+        from . import gd as gdmod
+        gdmod.write(wb, gd, 1)
     h = wb.create_sheet("Как читать")
     h.column_dimensions["A"].width = 30
     h.column_dimensions["B"].width = 100
