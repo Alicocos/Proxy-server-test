@@ -98,6 +98,26 @@ def build_sales(raw: dict, cfg: dict, today: datetime) -> dict:
         tags = {t.lower() for t in cp.get(aid, {}).get("tags", [])}
         return next((g for g, tag in groups if tag in tags), OTHER)
 
+    # торговые представители: по метке клиента или по самому покупателю (например, розница Фараби)
+    reps = cfg["sales"].get("reps", [])
+
+    def rep_of(aid):
+        c = cp.get(aid, {})
+        tags, name = {t.lower() for t in c.get("tags", [])}, c.get("name", "").lower()
+        for r in reps:
+            if r.get("agent") and r["agent"].lower() in name:
+                return r["name"]
+        for r in reps:
+            if r.get("tag") and r["tag"].lower() in tags:
+                return r["name"]
+        return "Остальные"
+
+    rep_names = [r["name"] for r in reps] + ["Остальные"]
+    month_start = today.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    days = [(month_start + timedelta(days=i)).date() for i in range((today - month_start).days + 1)]
+    daily = {d: defaultdict(float) for d in days}  # день -> представитель -> чистые продажи
+    daily_n = {d: defaultdict(int) for d in days}
+
     months = _months(today)
     full, cur = months[:12], months[-1]
     day0 = today.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -130,6 +150,11 @@ def build_sales(raw: dict, cfg: dict, today: datetime) -> dict:
                 c["last"] = max(c["last"] or when, when)
             else:
                 c["ret"][ym] += v
+            if reps and when.date() in daily:
+                rp = rep_of(aid)
+                daily[when.date()][rp] += sign * v
+                if sign > 0:
+                    daily_n[when.date()][rp] += 1
             g = group(aid)
             for k, (a, b) in periods.items():
                 if a <= when < b + timedelta(days=1):
@@ -162,7 +187,9 @@ def build_sales(raw: dict, cfg: dict, today: datetime) -> dict:
             "silent": [c["name"] for c in mem[:10] if c["last"] and (today - c["last"]).days > 45],
         }
     shown = [g for g in names if g != OTHER or G[g]["clients"]]
-    return {"today": today, "months": months, "full": full, "cur": cur, "groups": shown, "G": G, "clients": clients,
+    rep_shown = [r for r in rep_names if r != "Остальные" or any(daily[d]["Остальные"] for d in days)]
+    return {"daily": daily, "daily_n": daily_n, "days": days, "reps": rep_shown if reps else [],
+            "today": today, "months": months, "full": full, "cur": cur, "groups": shown, "G": G, "clients": clients,
             "total": sum(G[g]["total"] for g in names), "period_keys": list(periods)}
 
 
@@ -462,6 +489,47 @@ def _matrix(ws, rep, first, rows, top, fmt=M, share=True, width0=28):
     return r
 
 
+WD = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
+
+
+def _daily_block(ws, rep: dict, top: int) -> int:
+    """Ежедневная динамика текущего месяца по торговым представителям. Возвращает последнюю занятую строку."""
+    reps, days = rep["reps"], rep["days"]
+    ws.cell(row=top - 1, column=1, value=f"Продажи по дням: {RU[rep['today'].month - 1]} {rep['today'].year}, "
+                                         "по торговым представителям").font = BOLD
+    _head(ws, ["День"] + reps + ["Итого за день", "Отгрузок"], [28] + [14] * len(reps) + [15, 10], top)
+    r = top
+    for r, d in enumerate(days, top + 1):
+        ws.cell(row=r, column=1, value=f"{d:%d.%m} {WD[d.weekday()]}")
+        vals = [rep["daily"][d][x] for x in reps]
+        for j, v in enumerate(vals, 2):
+            ws.cell(row=r, column=j, value=round(v, 2) or None).number_format = M
+        ws.cell(row=r, column=len(reps) + 2, value=sum(vals) or None).number_format = M
+        ws.cell(row=r, column=len(reps) + 3, value=sum(rep["daily_n"][d].values()) or None)
+        if d.weekday() == 0:  # понедельник — выходной
+            for j in range(1, len(reps) + 4):
+                ws.cell(row=r, column=j).font = Font(color="999999")
+    r += 1
+    ws.cell(row=r, column=1, value="ИТОГО с начала месяца").font = BOLD
+    for j in range(2, len(reps) + 4):
+        col = get_column_letter(j)
+        c = ws.cell(row=r, column=j, value=f"=SUM({col}{top + 1}:{col}{r - 1})")
+        c.font, c.number_format = BOLD, M
+    r += 1
+    work = [d for d in days if d.weekday() != 0 and d < rep["today"].date()] or days
+    ws.cell(row=r, column=1, value="В среднем за рабочий день").font = Font(italic=True)
+    for j, x in enumerate(reps, 2):
+        ws.cell(row=r, column=j, value=sum(rep["daily"][d][x] for d in work) / len(work)).number_format = M
+    ws.cell(row=r, column=len(reps) + 2, value=sum(sum(rep["daily"][d][x] for x in reps) for d in work) / len(work)).number_format = M
+    ch = LineChart()
+    ch.title, ch.height, ch.width = "Продажи по дням", 8, 26
+    ch.y_axis.numFmt = '#,##0,,"млн"'
+    ch.add_data(Reference(ws, min_col=2, max_col=len(reps) + 1, min_row=top, max_row=top + len(days)), titles_from_data=True)
+    ch.set_categories(Reference(ws, min_col=1, min_row=top + 1, max_row=top + len(days)))
+    ws.add_chart(ch, f"{get_column_letter(len(reps) + 5)}{top}")
+    return r
+
+
 def write_sales(rep: dict, path: Path, yoy: dict | None = None) -> Path:
     G, groups, today = rep["G"], rep["groups"], rep["today"]
     wb = Workbook()
@@ -489,6 +557,8 @@ def write_sales(rep: dict, path: Path, yoy: dict | None = None) -> Path:
         c = ws.cell(row=r, column=i, value=f"=SUM({col}5:{col}{r - 1})")
         c.font, c.number_format = BOLD, M
     top = r + 3
+    if rep["reps"]:
+        top = _daily_block(ws, rep, top) + 3
     ws.cell(row=top - 1, column=1, value="Чистые продажи по месяцам").font = BOLD
     end = _matrix(ws, rep, "Группа", [(g, G[g]["net"]) for g in groups], top)
     ws.freeze_panes = None
@@ -557,6 +627,27 @@ def write_sales(rep: dict, path: Path, yoy: dict | None = None) -> Path:
     return path
 
 
+def daily_html(rep: dict, last: int = 7) -> str:
+    if not rep.get("reps"):
+        return ""
+    n = lambda v: f"{v:,.0f}".replace(",", " ") if v else "—"  # noqa: E731
+    days = rep["days"][-last:]
+    head = "".join(f"<th>{x}</th>" for x in rep["reps"])
+    body = ""
+    for d in days:
+        vals = [rep["daily"][d][x] for x in rep["reps"]]
+        grey = ' style="color:#999"' if d.weekday() == 0 else ""
+        body += (f"<tr{grey}><td>{d:%d.%m} {WD[d.weekday()]}</td>" + "".join(f'<td align="right">{n(v)}</td>' for v in vals)
+                 + f'<td align="right"><b>{n(sum(vals))}</b></td></tr>')
+    tot = [sum(rep["daily"][d][x] for d in rep["days"]) for x in rep["reps"]]
+    body += ("<tr><td><b>С начала месяца</b></td>" + "".join(f'<td align="right"><b>{n(v)}</b></td>' for v in tot)
+             + f'<td align="right"><b>{n(sum(tot))}</b></td></tr>')
+    return ("<h3>Продажи по дням по торговым представителям</h3>"
+            '<table border="1" cellpadding="4" style="border-collapse:collapse;font-size:13px;border-color:#ddd">'
+            f'<tr style="background:#1F4E78;color:#fff"><th align="left">День</th>{head}<th>Итого</th></tr>{body}</table>'
+            "<p style='color:#777;font-size:12px'>Последние 7 дней; весь месяц по дням — на первой странице файла.</p>")
+
+
 def html_section(rep: dict) -> str:
     n = lambda v: "—" if v is None else f"{v:,.0f}".replace(",", " ")  # noqa: E731
     rows, tot = "", defaultdict(float)
@@ -575,7 +666,7 @@ def html_section(rep: dict) -> str:
     if silent:
         extra = "<p><b>Крупные клиенты без покупок больше 45 дней:</b> " + "; ".join(
             f"{g} — {', '.join(s)}" for g, s in silent) + "</p>"
-    return ("<h3>Продажи по группам клиентов</h3>"
+    return (daily_html(rep) + "<h3>Продажи по группам клиентов</h3>"
             '<table border="1" cellpadding="4" style="border-collapse:collapse;font-size:13px;border-color:#ddd">'
             '<tr style="background:#1F4E78;color:#fff"><th align="left">Группа</th><th>Вчера</th><th>7 дней</th><th>Месяц с начала</th>'
             "<th>Прошлый месяц за те же дни</th><th>Изменение</th><th>Отгрузок за месяц</th><th>Клиентов за месяц</th></tr>"

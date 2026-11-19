@@ -38,6 +38,7 @@ def run_account(args, cfg: dict, today: datetime) -> int:
     acfg = copy.deepcopy(cfg)
     acfg["sales"]["groups"] = acc["groups"]
     acfg["sales"]["exclude_agents"] = acc.get("exclude_agents", [])
+    acfg["sales"]["reps"] = acc.get("reps", [])
     acfg["_yoy"] = acc.get("yoy", True)
     title, tag = acc["title"], acc["title"].replace(" ", "_")
     if args.raw:

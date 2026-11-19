@@ -291,3 +291,28 @@ def test_yoy_stockout_deposit_date(tmp_path):
     assert (s["dep_since"], s["dep_days"]) == (datetime(2026, 10, 1), 42)
     m["balances"] = {S1: -99000}
     assert a.build_money(m, CFG, TODAY)[0][0]["dep_text"] == "больше года"
+
+
+def test_daily_by_rep(tmp_path):
+    from msreport import sales
+    ag = lambda i: {"agent": {"meta": {"href": f"{H}/counterparty/{i}"}}}  # noqa: E731
+    F = "f" * 8 + "-ffff-ffff-ffff-" + "f" * 12
+    r = {"counterparties": [{"id": S1, "name": "Клиент", "tags": ["клиенты", "сержан клиент"]},
+                            {"id": F, "name": "Фараби роз.клиенты", "tags": ["клиенты"]},
+                            {"id": S2, "name": "Без менеджера", "tags": ["клиенты"]}],
+         "sales_docs": {"demand": [{"moment": "2026-11-10 09:00:00.000", "sum": 100000, **ag(S1)},
+                                   {"moment": "2026-11-10 10:00:00.000", "sum": 50000, **ag(F)},
+                                   {"moment": "2026-11-12 10:00:00.000", "sum": 70000, **ag(S2)},
+                                   {"moment": "2026-10-30 10:00:00.000", "sum": 999999, **ag(S1)}],
+                        "salesreturn": [{"moment": "2026-11-12 11:00:00.000", "sum": 20000, **ag(S1)}]}}
+    rep = sales.build_sales(r, CFG, TODAY)
+    from datetime import date
+    assert rep["reps"] == ["Алдияр", "Сержан", "Данияр", "Фараби", "Остальные"] and len(rep["days"]) == 12
+    assert rep["daily"][date(2026, 11, 10)]["Сержан"] == 1000 and rep["daily"][date(2026, 11, 10)]["Фараби"] == 500
+    assert rep["daily"][date(2026, 11, 12)]["Сержан"] == -200 and rep["daily"][date(2026, 11, 12)]["Остальные"] == 700
+    html = sales.html_section(rep)
+    assert "по торговым представителям" in html and "Фараби" in html
+    from openpyxl import load_workbook
+    ws = load_workbook(sales.write_sales(rep, tmp_path / "s.xlsx"))["Сводка"]
+    texts = [c.value for row in ws.iter_rows() for c in row if isinstance(c.value, str)]
+    assert any("Продажи по дням" in x for x in texts) and "10.11 вт" in texts
